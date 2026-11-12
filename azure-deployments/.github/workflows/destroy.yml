@@ -1,0 +1,270 @@
+name: "Terraform Destroy"
+
+on:
+  push:
+    branches: [main]
+    paths: ['requests/**']
+
+permissions:
+  contents: read
+
+env:
+  TF_CLOUD_ORGANIZATION: "<TFC_ORG>"
+  TF_TOKEN_app_terraform_io: ${{ secrets.TFC_API_TOKEN }}
+
+jobs:
+  detect-deleted:
+    name: "Detect Deleted Requests"
+    runs-on: ubuntu-latest
+    outputs:
+      directories: ${{ steps.dirs.outputs.directories }}
+      has_deletions: ${{ steps.dirs.outputs.has_deletions }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Find deleted request directories
+        id: dirs
+        run: |
+          # Find files that were deleted in this push
+          DELETED_DIRS=$(git diff --name-only --diff-filter=D \
+            HEAD~1...HEAD -- 'requests/' \
+            | xargs -I{} dirname {} \
+            | sort -u \
+            | grep '^requests/' \
+            | jq -R -s -c 'split("\n") | map(select(length > 0))')
+
+          echo "directories=${DELETED_DIRS}" >> "$GITHUB_OUTPUT"
+
+          if [[ "${DELETED_DIRS}" == "[]" || -z "${DELETED_DIRS}" ]]; then
+            echo "has_deletions=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_deletions=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "### Detected Deleted Directories" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`json" >> "$GITHUB_STEP_SUMMARY"
+          echo "${DELETED_DIRS}" | jq '.' >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+
+  resolve-env:
+    name: "Resolve Environment - ${{ matrix.directory }}"
+    needs: detect-deleted
+    if: needs.detect-deleted.outputs.has_deletions == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        directory: ${{ fromJson(needs.detect-deleted.outputs.directories) }}
+    outputs:
+      gh_environment: ${{ steps.parse.outputs.gh_environment }}
+    steps:
+      - name: Parse directory name for environment
+        id: parse
+        run: |
+          DIR_NAME=$(basename "${{ matrix.directory }}")
+
+          for ENV in prod nonprod uat qa test dev; do
+            if [[ "${DIR_NAME}" =~ ^st[a-z]+${ENV} ]]; then
+              ENVIRONMENT="${ENV}"
+              break
+            fi
+          done
+
+          if [[ -z "${ENVIRONMENT}" ]]; then
+            echo "::error::Could not determine environment from directory name: ${DIR_NAME}"
+            exit 1
+          fi
+
+          echo "gh_environment=destroy-${ENVIRONMENT}" >> "$GITHUB_OUTPUT"
+
+  destroy:
+    name: "Destroy - ${{ matrix.directory }}"
+    needs: [detect-deleted, resolve-env]
+    if: needs.detect-deleted.outputs.has_deletions == 'true'
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve-env.outputs.gh_environment }}
+    strategy:
+      fail-fast: false
+      matrix:
+        directory: ${{ fromJson(needs.detect-deleted.outputs.directories) }}
+    concurrency:
+      group: tfdestroy-${{ matrix.directory }}
+      cancel-in-progress: false
+    steps:
+      - name: Parse directory name
+        id: parse
+        run: |
+          DIR_NAME=$(basename "${{ matrix.directory }}")
+
+          # Extract environment from the directory name
+          for ENV in prod nonprod uat qa test dev; do
+            if [[ "${DIR_NAME}" =~ ^st[a-z]+${ENV} ]]; then
+              ENVIRONMENT="${ENV}"
+              break
+            fi
+          done
+
+          if [[ -z "${ENVIRONMENT}" ]]; then
+            echo "::error::Could not determine environment from directory name: ${DIR_NAME}"
+            exit 1
+          fi
+
+          WORKSPACE_NAME="${DIR_NAME}"
+
+          echo "environment=${ENVIRONMENT}" >> "$GITHUB_OUTPUT"
+          echo "workspace_name=${WORKSPACE_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Get workspace ID
+        id: workspace
+        run: |
+          WORKSPACE_ID=$(curl -s \
+            --header "Authorization: Bearer ${TF_TOKEN_app_terraform_io}" \
+            --header "Content-Type: application/vnd.api+json" \
+            "https://app.terraform.io/api/v2/organizations/${TF_CLOUD_ORGANIZATION}/workspaces/${{ steps.parse.outputs.workspace_name }}" \
+            | jq -r '.data.id')
+
+          if [[ -z "${WORKSPACE_ID}" || "${WORKSPACE_ID}" == "null" ]]; then
+            echo "::error::Workspace ${{ steps.parse.outputs.workspace_name }} not found"
+            exit 1
+          fi
+
+          echo "workspace_id=${WORKSPACE_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Create destroy run
+        id: destroy-run
+        run: |
+          PAYLOAD=$(cat <<'JSONEOF'
+          {
+            "data": {
+              "attributes": {
+                "is-destroy": true,
+                "message": "Destroy triggered by directory deletion (commit ${{ github.sha }})"
+              },
+              "type": "runs",
+              "relationships": {
+                "workspace": {
+                  "data": {
+                    "type": "workspaces",
+                    "id": "${{ steps.workspace.outputs.workspace_id }}"
+                  }
+                }
+              }
+            }
+          }
+          JSONEOF
+          )
+
+          RESPONSE=$(curl -s \
+            --header "Authorization: Bearer ${TF_TOKEN_app_terraform_io}" \
+            --header "Content-Type: application/vnd.api+json" \
+            --request POST \
+            --data "${PAYLOAD}" \
+            "https://app.terraform.io/api/v2/runs")
+
+          RUN_ID=$(echo "${RESPONSE}" | jq -r '.data.id')
+
+          if [[ -z "${RUN_ID}" || "${RUN_ID}" == "null" ]]; then
+            echo "::error::Failed to create destroy run"
+            echo "${RESPONSE}" | jq '.'
+            exit 1
+          fi
+
+          echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
+          echo "Destroy run created: ${RUN_ID}"
+
+      - name: Confirm destroy run
+        run: |
+          RUN_ID="${{ steps.destroy-run.outputs.run_id }}"
+
+          # Wait for the run to be confirmable, then confirm it
+          for i in $(seq 1 60); do
+            STATUS=$(curl -s \
+              --header "Authorization: Bearer ${TF_TOKEN_app_terraform_io}" \
+              "https://app.terraform.io/api/v2/runs/${RUN_ID}" \
+              | jq -r '.data.attributes.status')
+
+            echo "Run status: ${STATUS} (attempt ${i}/60)"
+
+            case "${STATUS}" in
+              "planned")
+                echo "Confirming destroy run..."
+                curl -s \
+                  --header "Authorization: Bearer ${TF_TOKEN_app_terraform_io}" \
+                  --header "Content-Type: application/vnd.api+json" \
+                  --request POST \
+                  --data '{"comment":"Auto-confirmed destroy for deleted request directory"}' \
+                  "https://app.terraform.io/api/v2/runs/${RUN_ID}/actions/confirm"
+                echo "Destroy run confirmed."
+                break
+                ;;
+              "applied"|"planned_and_finished")
+                echo "Run already completed."
+                break
+                ;;
+              "errored"|"canceled"|"force_canceled"|"discarded")
+                echo "::error::Run ended with status: ${STATUS}"
+                exit 1
+                ;;
+              *)
+                sleep 10
+                ;;
+            esac
+          done
+
+      - name: Wait for destroy to complete
+        run: |
+          RUN_ID="${{ steps.destroy-run.outputs.run_id }}"
+
+          for i in $(seq 1 120); do
+            STATUS=$(curl -s \
+              --header "Authorization: Bearer ${TF_TOKEN_app_terraform_io}" \
+              "https://app.terraform.io/api/v2/runs/${RUN_ID}" \
+              | jq -r '.data.attributes.status')
+
+            echo "Run status: ${STATUS} (attempt ${i}/120)"
+
+            case "${STATUS}" in
+              "applied"|"planned_and_finished")
+                echo "Destroy completed successfully."
+                break
+                ;;
+              "errored"|"canceled"|"force_canceled"|"discarded")
+                echo "::error::Destroy run failed with status: ${STATUS}"
+                exit 1
+                ;;
+              *)
+                sleep 15
+                ;;
+            esac
+          done
+
+          if [[ "${STATUS}" != "applied" && "${STATUS}" != "planned_and_finished" ]]; then
+            echo "::error::Destroy run timed out"
+            exit 1
+          fi
+
+      - name: Delete workspace
+        run: |
+          WORKSPACE_ID="${{ steps.workspace.outputs.workspace_id }}"
+
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            --header "Authorization: Bearer ${TF_TOKEN_app_terraform_io}" \
+            --header "Content-Type: application/vnd.api+json" \
+            --request DELETE \
+            "https://app.terraform.io/api/v2/workspaces/${WORKSPACE_ID}")
+
+          if [[ "${HTTP_STATUS}" -eq 200 || "${HTTP_STATUS}" -eq 204 ]]; then
+            echo "Workspace ${{ steps.parse.outputs.workspace_name }} deleted successfully."
+          else
+            echo "::error::Failed to delete workspace (HTTP ${HTTP_STATUS})"
+            exit 1
+          fi
+
+      - name: Post destroy summary
+        run: |
+          echo "### Terraform Destroy: \`${{ steps.parse.outputs.workspace_name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Run ID:** \`${{ steps.destroy-run.outputs.run_id }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Workspace:** Deleted" >> "$GITHUB_STEP_SUMMARY"

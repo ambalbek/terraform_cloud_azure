@@ -1,0 +1,154 @@
+name: "Terraform Apply"
+
+on:
+  push:
+    branches: [main]
+    paths: ['requests/**']
+
+permissions:
+  contents: read
+
+env:
+  TF_CLOUD_ORGANIZATION: "<TFC_ORG>"
+  TF_TOKEN_app_terraform_io: ${{ secrets.TFC_API_TOKEN }}
+
+jobs:
+  detect:
+    name: "Detect Changed Requests"
+    runs-on: ubuntu-latest
+    outputs:
+      directories: ${{ steps.dirs.outputs.directories }}
+      has_changes: ${{ steps.dirs.outputs.has_changes }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Find changed request directories
+        id: dirs
+        run: |
+          CHANGED_DIRS=$(git diff --name-only --diff-filter=ACMRT \
+            HEAD~1...HEAD -- 'requests/' \
+            | xargs -I{} dirname {} \
+            | sort -u \
+            | grep '^requests/' \
+            | jq -R -s -c 'split("\n") | map(select(length > 0))')
+
+          echo "directories=${CHANGED_DIRS}" >> "$GITHUB_OUTPUT"
+
+          if [[ "${CHANGED_DIRS}" == "[]" || -z "${CHANGED_DIRS}" ]]; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "### Detected Directories" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`json" >> "$GITHUB_STEP_SUMMARY"
+          echo "${CHANGED_DIRS}" | jq '.' >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+
+  resolve-env:
+    name: "Resolve Environment - ${{ matrix.directory }}"
+    needs: detect
+    if: needs.detect.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        directory: ${{ fromJson(needs.detect.outputs.directories) }}
+    outputs:
+      gh_environment: ${{ steps.parse.outputs.gh_environment }}
+    steps:
+      - name: Parse directory name for environment
+        id: parse
+        run: |
+          DIR_NAME=$(basename "${{ matrix.directory }}")
+
+          for ENV in prod nonprod uat qa test dev; do
+            if [[ "${DIR_NAME}" =~ ^st[a-z]+${ENV} ]]; then
+              ENVIRONMENT="${ENV}"
+              break
+            fi
+          done
+
+          if [[ -z "${ENVIRONMENT}" ]]; then
+            echo "::error::Could not determine environment from directory name: ${DIR_NAME}"
+            exit 1
+          fi
+
+          if [[ "${ENVIRONMENT}" == "prod" ]]; then
+            echo "gh_environment=prod" >> "$GITHUB_OUTPUT"
+          else
+            echo "gh_environment=nonprod" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "workspace_name=${DIR_NAME}" >> "$GITHUB_OUTPUT"
+
+  apply:
+    name: "Apply - ${{ matrix.directory }}"
+    needs: [detect, resolve-env]
+    if: needs.detect.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    environment: ${{ needs.resolve-env.outputs.gh_environment }}
+    strategy:
+      fail-fast: false
+      matrix:
+        directory: ${{ fromJson(needs.detect.outputs.directories) }}
+    concurrency:
+      group: tfapply-${{ matrix.directory }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Parse directory name
+        id: parse
+        run: |
+          DIR_NAME=$(basename "${{ matrix.directory }}")
+
+          for ENV in prod nonprod uat qa test dev; do
+            if [[ "${DIR_NAME}" =~ ^st[a-z]+${ENV} ]]; then
+              ENVIRONMENT="${ENV}"
+              break
+            fi
+          done
+
+          if [[ -z "${ENVIRONMENT}" ]]; then
+            echo "::error::Could not determine environment from directory name: ${DIR_NAME}"
+            exit 1
+          fi
+
+          WORKSPACE_NAME="${DIR_NAME}"
+
+          echo "environment=${ENVIRONMENT}" >> "$GITHUB_OUTPUT"
+          echo "workspace_name=${WORKSPACE_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload configuration
+        uses: hashicorp/tfc-workflows-github/actions/upload-configuration@v1.3.1
+        id: upload
+        with:
+          workspace: ${{ steps.parse.outputs.workspace_name }}
+          directory: ${{ matrix.directory }}
+          speculative: false
+
+      - name: Create apply run
+        uses: hashicorp/tfc-workflows-github/actions/create-run@v1.3.1
+        id: apply-run
+        with:
+          workspace: ${{ steps.parse.outputs.workspace_name }}
+          configuration_version: ${{ steps.upload.outputs.configuration_version_id }}
+
+      - name: Confirm and apply run
+        uses: hashicorp/tfc-workflows-github/actions/apply-run@v1.3.1
+        id: apply
+        with:
+          run: ${{ steps.apply-run.outputs.run_id }}
+          comment: "Apply triggered by push to main (commit ${{ github.sha }})"
+
+      - name: Post apply summary
+        run: |
+          echo "### Terraform Apply: \`${{ steps.parse.outputs.workspace_name }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Run ID:** \`${{ steps.apply-run.outputs.run_id }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Status:** ${{ steps.apply.outputs.status }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Run URL:** ${{ steps.apply-run.outputs.run_link }}" >> "$GITHUB_STEP_SUMMARY"

@@ -1,0 +1,8 @@
+# All request changes require Cloud COE review
+/requests/ @<GITHUB_ORG>/cloud-coe
+
+# Workflow changes require platform team review
+/.github/ @<GITHUB_ORG>/platform-team
+
+# Bootstrap changes require senior review
+/bootstrap/ @<GITHUB_ORG>/platform-leads

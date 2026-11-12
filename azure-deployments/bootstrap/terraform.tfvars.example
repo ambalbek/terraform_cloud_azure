@@ -1,0 +1,15 @@
+# HCP Terraform
+tfc_org   = "<TFC_ORG>"
+tfc_token = "<TFC_API_TOKEN>"
+
+# Azure
+tenant_id = "<TENANT_ID>"
+
+subscriptions = {
+  prod    = "<SUB_ID>"
+  nonprod = "<SUB_ID>"
+}
+
+# GitHub
+github_org  = "<GITHUB_ORG>"
+github_repo = "azure-deployments"

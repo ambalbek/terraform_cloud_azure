@@ -1,0 +1,60 @@
+{
+  "abbreviations": {
+    "resource_group": "rg",
+    "virtual_machine": "vm",
+    "storage_account": "st",
+    "key_vault": "kv",
+    "function_app": "func",
+    "virtual_network": "vnet",
+    "subnet": "snet",
+    "network_interface": "nic",
+    "os_disk": "osdisk",
+    "managed_disk": "disk",
+    "public_ip": "pip",
+    "virtual_wan": "vwan",
+    "virtual_hub": "vhub",
+    "load_balancer_external": "lbe",
+    "load_balancer_internal": "lbi",
+    "availability_set": "avail"
+  },
+  "region_codes": {
+    "centralus": "cus",
+    "canadacentral": "cnc",
+    "northcentralus": "ncus",
+    "southcentralus": "scus",
+    "westeurope": "we",
+    "northeurope": "ne",
+    "australiaeast": "ae",
+    "australiasoutheast": "ase"
+  },
+  "environments": [
+    "prod",
+    "dev",
+    "test",
+    "qa",
+    "uat",
+    "nonprod"
+  ],
+  "workloads": [
+    "sdwan",
+    "sdwan-fgt",
+    "hub",
+    "probe",
+    "core",
+    "app"
+  ],
+  "max_lengths": {
+    "storage_account": 24,
+    "key_vault": 24
+  },
+  "special_rules": {
+    "storage_account": {
+      "max_length": 24,
+      "allow_hyphens": false
+    },
+    "key_vault": {
+      "max_length": 24,
+      "allow_hyphens": true
+    }
+  }
+}
