@@ -17,14 +17,16 @@ on:
       environment:
         type: choice
         required: true
-        description: 'Environment'
+        description: 'Target environment(s)'
         options:
           - dev
+          - uat
+          - prod
+          - dev,uat
+          - dev,uat,prod
           - test
           - qa
-          - uat
           - nonprod
-          - prod
       region:
         type: choice
         required: true
@@ -72,7 +74,7 @@ jobs:
     uses: ./.github/workflows/_request.yml
     with:
       workload: ${{ inputs.workload }}
-      environment: ${{ inputs.environment }}
+      environments: ${{ inputs.environment }}
       region: ${{ inputs.region }}
       resource_type: eventhub_namespace
       key: ${{ inputs.key }}
