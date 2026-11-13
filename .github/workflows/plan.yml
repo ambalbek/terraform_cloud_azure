@@ -3,7 +3,7 @@ name: "Terraform Plan"
 on:
   pull_request:
     branches: [main]
-    paths: ['azure-deployments/requests/**']
+    paths: ['workloads/**']
 
 permissions:
   contents: read
@@ -15,142 +15,138 @@ env:
 
 jobs:
   detect:
-    name: "Detect Changed Requests"
+    name: "Detect Changed Workloads"
     runs-on: ubuntu-latest
     outputs:
-      directories: ${{ steps.dirs.outputs.directories }}
-      has_changes: ${{ steps.dirs.outputs.has_changes }}
+      entries: ${{ steps.detect.outputs.entries }}
+      has_changes: ${{ steps.detect.outputs.has_changes }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Find changed request directories
-        id: dirs
+      - name: Detect changed workload-environment pairs
+        id: detect
         run: |
-          CHANGED_DIRS=$(git diff --name-only --diff-filter=ACMRT \
-            origin/${{ github.base_ref }}...HEAD -- 'azure-deployments/requests/' \
-            | xargs -I{} dirname {} \
-            | sort -u \
-            | grep '^azure-deployments/requests/' \
-            | jq -R -s -c 'split("\n") | map(select(length > 0))')
+          CHANGED_FILES=$(git diff --name-only --diff-filter=ACMRT \
+            origin/${{ github.base_ref }}...HEAD -- 'workloads/')
 
-          echo "directories=${CHANGED_DIRS}" >> "$GITHUB_OUTPUT"
+          ENTRIES="[]"
 
-          if [[ "${CHANGED_DIRS}" == "[]" || -z "${CHANGED_DIRS}" ]]; then
+          for FILE in ${CHANGED_FILES}; do
+            # Only process files directly under workloads/<workload>/
+            DIR=$(dirname "${FILE}")
+            WORKLOAD=$(echo "${DIR}" | cut -d'/' -f2)
+            BASENAME=$(basename "${FILE}")
+
+            if [[ "${DIR}" != "workloads/${WORKLOAD}" ]]; then
+              continue
+            fi
+
+            if [[ "${BASENAME}" == *.json ]]; then
+              # A specific env json changed -> that single env
+              ENV="${BASENAME%.json}"
+              ENTRY=$(jq -n -c \
+                --arg dir "workloads/${WORKLOAD}" \
+                --arg ws "${WORKLOAD}-${ENV}" \
+                --arg env "${ENV}" \
+                --arg wl "${WORKLOAD}" \
+                '{directory: $dir, workspace: $ws, environment: $env, workload: $wl}')
+              ENTRIES=$(echo "${ENTRIES}" | jq -c ". + [${ENTRY}]")
+            elif [[ "${BASENAME}" == "main.tf" || "${BASENAME}" == "variables.tf" || "${BASENAME}" == "versions.tf" ]]; then
+              # Shared TF file changed -> all envs for this workload
+              for JSON_FILE in workloads/${WORKLOAD}/*.json; do
+                if [[ -f "${JSON_FILE}" ]]; then
+                  ENV=$(basename "${JSON_FILE}" .json)
+                  ENTRY=$(jq -n -c \
+                    --arg dir "workloads/${WORKLOAD}" \
+                    --arg ws "${WORKLOAD}-${ENV}" \
+                    --arg env "${ENV}" \
+                    --arg wl "${WORKLOAD}" \
+                    '{directory: $dir, workspace: $ws, environment: $env, workload: $wl}')
+                  ENTRIES=$(echo "${ENTRIES}" | jq -c ". + [${ENTRY}]")
+                fi
+              done
+            fi
+          done
+
+          # Deduplicate by workspace name
+          ENTRIES=$(echo "${ENTRIES}" | jq -c '[group_by(.workspace)[] | .[0]]')
+
+          echo "entries=${ENTRIES}" >> "$GITHUB_OUTPUT"
+
+          if [[ "${ENTRIES}" == "[]" ]]; then
             echo "has_changes=false" >> "$GITHUB_OUTPUT"
           else
             echo "has_changes=true" >> "$GITHUB_OUTPUT"
           fi
 
-          echo "### Detected Directories" >> "$GITHUB_STEP_SUMMARY"
-          echo "\`\`\`json" >> "$GITHUB_STEP_SUMMARY"
-          echo "${CHANGED_DIRS}" | jq '.' >> "$GITHUB_STEP_SUMMARY"
-          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Detected Workload-Environment Pairs" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          echo "${ENTRIES}" | jq '.' >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
 
   plan:
-    name: "Plan - ${{ matrix.directory }}"
+    name: "Plan - ${{ matrix.workspace }}"
     needs: detect
     if: needs.detect.outputs.has_changes == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        directory: ${{ fromJson(needs.detect.outputs.directories) }}
+        include: ${{ fromJson(needs.detect.outputs.entries) }}
     concurrency:
-      group: tfplan-${{ matrix.directory }}
+      group: tfplan-${{ matrix.workspace }}
       cancel-in-progress: true
+    env:
+      TF_WORKSPACE: ${{ matrix.workspace }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Parse directory name
-        id: parse
-        run: |
-          DIR_NAME=$(basename "${{ matrix.directory }}")
-
-          # Name format: <abbrev>-<region>-<env>-<workload>[-role][-instance]
-          # Environment is the 3rd hyphen-delimited field
-          ENVIRONMENT=$(echo "${DIR_NAME}" | cut -d'-' -f3)
-
-          if [[ ! "${ENVIRONMENT}" =~ ^(prod|nonprod|uat|qa|test|dev)$ ]]; then
-            echo "::error::Invalid environment '${ENVIRONMENT}' from directory name: ${DIR_NAME}"
-            exit 1
-          fi
-
-          # Determine TFC project
-          if [[ "${ENVIRONMENT}" == "prod" ]]; then
-            TFC_PROJECT="prod"
-          else
-            TFC_PROJECT="nonprod"
-          fi
-
-          WORKSPACE_NAME="${DIR_NAME}"
-
-          echo "environment=${ENVIRONMENT}" >> "$GITHUB_OUTPUT"
-          echo "tfc_project=${TFC_PROJECT}" >> "$GITHUB_OUTPUT"
-          echo "workspace_name=${WORKSPACE_NAME}" >> "$GITHUB_OUTPUT"
-          echo "dir_name=${DIR_NAME}" >> "$GITHUB_OUTPUT"
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
 
       - name: Terraform fmt check
-        run: |
-          cd "${{ matrix.directory }}"
-          terraform fmt -check -diff
+        run: terraform -chdir=${{ matrix.directory }} fmt -check -diff
+
+      - name: Terraform init
+        run: terraform -chdir=${{ matrix.directory }} init
 
       - name: Terraform validate
-        run: |
-          cd "${{ matrix.directory }}"
-          terraform init -backend=false
-          terraform validate
+        run: terraform -chdir=${{ matrix.directory }} validate
 
-      - name: "TODO: tflint"
-        run: |
-          echo "::notice::TODO - Add tflint step for ${{ matrix.directory }}"
-          # TODO: Install and run tflint
-          # - uses: terraform-linters/setup-tflint@v4
-          # - run: tflint --init && tflint
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v4
 
-      - name: "TODO: checkov"
+      - name: Run TFLint
         run: |
-          echo "::notice::TODO - Add checkov step for ${{ matrix.directory }}"
-          # TODO: Install and run checkov
-          # - uses: bridgecrewio/checkov-action@v12
-          #   with:
-          #     directory: ${{ matrix.directory }}
+          cd ${{ matrix.directory }}
+          tflint --init
+          tflint
 
-      - name: Validate naming convention
-        run: |
-          DIR_NAME="${{ steps.parse.outputs.dir_name }}"
-          # Validate: <abbrev>-<region>-<env>-<workload>[-role][-instance]
-          if [[ ! "${DIR_NAME}" =~ ^[a-z]+-[a-z]+-[a-z]+-[a-z0-9-]+$ ]]; then
-            echo "::error::Directory name '${DIR_NAME}' does not match the naming convention"
-            exit 1
-          fi
-
-      - name: Create or update TFC workspace
-        uses: hashicorp/tfc-workflows-github/actions/workspace-create@v1.3.1
-        id: workspace
-        continue-on-error: true
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@v12
         with:
-          workspace: ${{ steps.parse.outputs.workspace_name }}
-          organization: ${{ env.TF_CLOUD_ORGANIZATION }}
-          project: ${{ steps.parse.outputs.tfc_project }}
-          execution_mode: "api-driven"
+          directory: ${{ matrix.directory }}
+          framework: terraform
+          quiet: true
+          soft_fail: true
 
-      - name: Upload configuration
+      - name: Upload configuration (speculative)
         uses: hashicorp/tfc-workflows-github/actions/upload-configuration@v1.3.1
         id: upload
         with:
-          workspace: ${{ steps.parse.outputs.workspace_name }}
+          workspace: ${{ matrix.workspace }}
           directory: ${{ matrix.directory }}
           speculative: true
 
-      - name: Create speculative plan
+      - name: Create speculative plan run
         uses: hashicorp/tfc-workflows-github/actions/create-run@v1.3.1
         id: plan-run
         with:
-          workspace: ${{ steps.parse.outputs.workspace_name }}
+          workspace: ${{ matrix.workspace }}
           configuration_version: ${{ steps.upload.outputs.configuration_version_id }}
           plan_only: true
 
@@ -165,21 +161,23 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const workspace = '${{ steps.parse.outputs.workspace_name }}';
+            const workspace = '${{ matrix.workspace }}';
             const add = '${{ steps.plan-output.outputs.add }}';
             const change = '${{ steps.plan-output.outputs.change }}';
             const destroy = '${{ steps.plan-output.outputs.destroy }}';
             const runUrl = '${{ steps.plan-run.outputs.run_link }}';
 
-            const body = `### Terraform Plan: \`${workspace}\`
-
-            | Action  | Count |
-            |---------|-------|
-            | Add     | ${add} |
-            | Change  | ${change} |
-            | Destroy | ${destroy} |
-
-            [View full plan in HCP Terraform](${runUrl})`;
+            const body = [
+              `### Terraform Plan: \`${workspace}\``,
+              '',
+              '| Action  | Count |',
+              '|---------|-------|',
+              `| Add     | ${add} |`,
+              `| Change  | ${change} |`,
+              `| Destroy | ${destroy} |`,
+              '',
+              `[View full plan in HCP Terraform](${runUrl})`
+            ].join('\n');
 
             await github.rest.issues.createComment({
               owner: context.repo.owner,

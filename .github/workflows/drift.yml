@@ -1,0 +1,156 @@
+name: "Drift Detection"
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly, Monday 6am UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  TF_CLOUD_ORGANIZATION: "<TFC_ORG>"
+  TF_TOKEN_app_terraform_io: ${{ secrets.TFC_API_TOKEN }}
+
+jobs:
+  detect-workspaces:
+    name: "List Workspaces"
+    runs-on: ubuntu-latest
+    outputs:
+      workspaces: ${{ steps.list.outputs.workspaces }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build workspace list from workloads
+        id: list
+        run: |
+          WORKSPACES="[]"
+          for DIR in workloads/*/; do
+            WORKLOAD=$(basename "${DIR}")
+            for JSON_FILE in "${DIR}"*.json; do
+              if [[ -f "${JSON_FILE}" ]]; then
+                ENV=$(basename "${JSON_FILE}" .json)
+                WS="${WORKLOAD}-${ENV}"
+                WORKSPACES=$(echo "${WORKSPACES}" | jq -c \
+                  --arg ws "${WS}" \
+                  --arg dir "workloads/${WORKLOAD}" \
+                  --arg env "${ENV}" \
+                  --arg wl "${WORKLOAD}" \
+                  '. + [{workspace: $ws, directory: $dir, environment: $env, workload: $wl}]')
+              fi
+            done
+          done
+          echo "workspaces=${WORKSPACES}" >> "$GITHUB_OUTPUT"
+
+  drift-check:
+    name: "Drift - ${{ matrix.workspace }}"
+    needs: detect-workspaces
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.detect-workspaces.outputs.workspaces) }}
+    concurrency:
+      group: drift-${{ matrix.workspace }}
+      cancel-in-progress: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Upload configuration (speculative)
+        uses: hashicorp/tfc-workflows-github/actions/upload-configuration@v1.3.1
+        id: upload
+        with:
+          workspace: ${{ matrix.workspace }}
+          directory: ${{ matrix.directory }}
+          speculative: true
+
+      - name: Create plan-only run
+        uses: hashicorp/tfc-workflows-github/actions/create-run@v1.3.1
+        id: plan-run
+        with:
+          workspace: ${{ matrix.workspace }}
+          configuration_version: ${{ steps.upload.outputs.configuration_version_id }}
+          plan_only: true
+          message: "Drift detection (scheduled)"
+
+      - name: Get plan output
+        uses: hashicorp/tfc-workflows-github/actions/plan-output@v1.3.1
+        id: plan-output
+        with:
+          plan: ${{ steps.plan-run.outputs.plan_id }}
+
+      - name: Manage drift issue
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const workspace = '${{ matrix.workspace }}';
+            const add = parseInt('${{ steps.plan-output.outputs.add }}') || 0;
+            const change = parseInt('${{ steps.plan-output.outputs.change }}') || 0;
+            const destroy = parseInt('${{ steps.plan-output.outputs.destroy }}') || 0;
+            const runUrl = '${{ steps.plan-run.outputs.run_link }}';
+            const hasDrift = (add + change + destroy) > 0;
+            const title = `Drift detected: ${workspace}`;
+
+            // Find existing issue
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'drift',
+              per_page: 100
+            });
+            const existing = issues.data.find(i => i.title === title);
+
+            if (hasDrift) {
+              const body = [
+                `## Drift detected in workspace \`${workspace}\``,
+                '',
+                '| Action  | Count |',
+                '|---------|-------|',
+                `| Add     | ${add} |`,
+                `| Change  | ${change} |`,
+                `| Destroy | ${destroy} |`,
+                '',
+                `[View plan in HCP Terraform](${runUrl})`,
+                '',
+                `Last checked: ${new Date().toISOString()}`
+              ].join('\n');
+
+              if (existing) {
+                await github.rest.issues.update({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: existing.number,
+                  body: body
+                });
+                console.log(`Updated issue #${existing.number}`);
+              } else {
+                await github.rest.issues.create({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  title: title,
+                  body: body,
+                  labels: ['drift']
+                });
+                console.log('Created new drift issue');
+              }
+            } else if (existing) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                state: 'closed',
+                state_reason: 'completed'
+              });
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body: `No drift detected as of ${new Date().toISOString()}. Closing.`
+              });
+              console.log(`Closed issue #${existing.number}`);
+            }
