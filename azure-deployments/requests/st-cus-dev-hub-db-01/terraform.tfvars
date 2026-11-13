@@ -1,0 +1,16 @@
+workload                   = "hub"
+environment                = "dev"
+region                     = "centralus"
+role                       = "db"
+instance                   = "01"
+resource_group_name        = "rg-cus-dev-hub"
+account_tier               = "Standard"
+replication_type           = "GRS"
+account_kind               = "StorageV2"
+access_tier                = "Hot"
+enable_versioning          = true
+enable_blob_soft_delete    = true
+soft_delete_retention_days = 30
+enable_diagnostics         = false
+owner                      = "it-ccoe"
+cost_center                = "vantage-dc"
