@@ -1,0 +1,38 @@
+{
+  "resource_type": "storage_account",
+  "abbreviation_key": "storage_account",
+  "module_source": "Azure/avm-res-storage-storageaccount/azurerm",
+  "module_version": "~> 0.11",
+  "description": "Azure Storage Account (AVM)",
+  "parameters": {
+    "account_tier": {
+      "type": "string",
+      "description": "Account tier",
+      "allowed": ["Standard", "Premium"],
+      "default": "Standard"
+    },
+    "account_replication_type": {
+      "type": "string",
+      "description": "Replication type",
+      "allowed": ["LRS", "GRS", "ZRS", "GZRS"],
+      "default": "GRS"
+    },
+    "account_kind": {
+      "type": "string",
+      "description": "Account kind",
+      "allowed": ["StorageV2", "BlobStorage"],
+      "default": "StorageV2"
+    },
+    "access_tier": {
+      "type": "string",
+      "description": "Access tier",
+      "allowed": ["Hot", "Cool"],
+      "default": "Hot"
+    }
+  },
+  "secure_defaults": {
+    "public_network_access_enabled": false,
+    "min_tls_version": "TLS1_2",
+    "shared_access_key_enabled": false
+  }
+}

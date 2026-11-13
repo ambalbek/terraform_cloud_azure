@@ -1,5 +1,5 @@
 terraform {
-  required_version = ">= 1.6.0"
+  required_version = ">= 1.9.0"
 
   required_providers {
     tfe = {
@@ -28,5 +28,5 @@ provider "azuread" {
 provider "azurerm" {
   features {}
   tenant_id       = var.tenant_id
-  subscription_id = var.subscriptions["prod"]
+  subscription_id = var.subscription_id
 }

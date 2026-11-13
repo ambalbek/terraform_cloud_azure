@@ -1,54 +1,74 @@
-# Bootstrap: HCP Terraform + Azure OIDC
+# Bootstrap
 
-This Terraform configuration bootstraps the foundational trust relationship between HCP Terraform and Azure. It is run once (or when adding new projects) and creates everything needed for the self-service platform to operate.
+Creates the HCP Terraform and Azure infrastructure for the self-service platform.
 
-## What It Creates
+## What it creates
 
-- **HCP Terraform projects** for `prod` and `nonprod`
-- **CI/CD team + token** for GitHub Actions to interact with HCP Terraform
-- **Variable sets** with Azure OIDC credentials scoped to each project
-- **Azure AD applications** with federated identity credentials (OIDC trust)
-  - Plan identities (Reader role) for `terraform plan`
-  - Apply identities (Contributor role) for `terraform apply`
-- **Role assignments** on the target subscriptions
+### HCP Terraform
+- **Projects**: `prod`, `nonprod`
+- **Workspaces**: one per workload-environment (e.g. `sdwan-dev`, `sdwan-uat`, `sdwan-prod`)
+  - API-driven execution, working directory `workloads/<workload>`
+  - Terraform variable `environment` set per workspace
+- **CI/CD team + token**: for GitHub Actions
+- **Variable sets**: Azure OIDC credentials per project
+
+### Azure AD
+- **App registrations**: one plan + one apply identity per project
+- **Federated credentials**: exact-match per workspace per phase (plan/apply)
+  - Subject: `organization:<org>:project:<project>:workspace:<workspace>:run_phase:<phase>`
+  - 20-per-app limit enforced by a check block
+
+### Azure
+- **Resource groups**: one per workload-environment, named `rg-<env>-<workload>`
+- **Management locks**: CanNotDelete on prod resource groups
+- **Role assignments**:
+  - Plan identity: Reader at subscription scope
+  - Apply identity: Contributor scoped to its project's resource groups only
+- **Azure Policy** (deny effect):
+  - Allowed regions
+  - Required tags (one assignment per tag)
+  - No public network access on storage accounts, Event Hub namespaces, Key Vaults
 
 ## Prerequisites
 
-1. **Terraform >= 1.6.0** installed locally
-2. **HCP Terraform organization** created with an API token that has organization-level access
-3. **Azure AD permissions**: the identity running this bootstrap must be able to:
-   - Create Azure AD applications and service principals
-   - Create federated identity credentials
-   - Assign roles on target subscriptions (Owner or User Access Administrator)
-4. **Azure subscriptions** for prod and nonprod already created
+1. Azure CLI authenticated with Owner rights on the subscription
+2. HCP Terraform org-level API token
+3. Permissions to create Entra ID applications
 
-## Run Order
+## Run order
 
 ```bash
-# 1. Copy and fill in the variables
 cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars with your actual values
+# Edit terraform.tfvars with real values
 
-# 2. Initialize
 terraform init
-
-# 3. Plan and review
 terraform plan
-
-# 4. Apply
 terraform apply
-
-# 5. Save the CI/CD team token as a GitHub Actions secret
-terraform output -raw cicd_team_token
-# Store this as TFC_API_TOKEN in your GitHub repo secrets
-
-# 6. Note the apply client IDs - these are needed for the apply workflow
-terraform output apply_client_ids
 ```
 
-## After Bootstrap
+## After bootstrap
 
-- Set the `TFC_API_TOKEN` GitHub Actions secret from the team token output
-- The plan workflow will automatically use the plan identity via OIDC
-- The apply workflow needs the apply identity client ID (set in workflow or variable set)
-- New workspaces are created dynamically -- the wildcard federated credential handles this
+1. Set the `TFC_API_TOKEN` repo secret to the `cicd_team_token` output
+2. Push `workloads/` to trigger the first plan
+
+## Adding a workload
+
+Add it to the `workloads` map in `terraform.tfvars` and re-apply bootstrap.
+This creates the workspace, resource group, role assignments, and federated credentials.
+
+## Federated credential limits
+
+Each Entra ID application supports max 20 federated credentials.
+The nonprod project covers dev, test, qa, uat, and nonprod environments,
+so at most 20 workloads can share the nonprod plan or apply identity.
+
+If this limit is reached:
+1. **Split identities per workload** instead of per project
+2. **Flexible federated identity credentials** (Entra Workload ID preview feature)
+   — verify current availability and azuread provider support before adopting
+
+## Consequences
+
+- Adding a new resource group requires a bootstrap change by the platform team
+- Deleting resources in a locked prod group requires Owner to remove the lock first
+- Apply identities cannot modify resources outside their scoped resource groups

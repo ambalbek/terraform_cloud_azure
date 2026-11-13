@@ -1,0 +1,260 @@
+name: "_request"
+
+on:
+  workflow_call:
+    inputs:
+      workload:
+        required: true
+        type: string
+      environments:
+        required: true
+        type: string
+        description: "Comma-separated environment codes, e.g. 'dev', 'dev,uat', 'dev,uat,prod'"
+      region:
+        required: true
+        type: string
+      resource_type:
+        required: true
+        type: string
+      key:
+        required: true
+        type: string
+        description: "Role and instance, e.g. 'db-01', 'default', 'internal-02'"
+      parameters_json:
+        required: true
+        type: string
+        description: "JSON string of type-specific parameters"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  create-request:
+    name: "Add ${{ inputs.resource_type }} ${{ inputs.key }} to ${{ inputs.workload }}"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Validate inputs against naming-rules.json
+        env:
+          INPUT_WORKLOAD: ${{ inputs.workload }}
+          INPUT_ENVS: ${{ inputs.environments }}
+          INPUT_TYPE: ${{ inputs.resource_type }}
+          INPUT_KEY: ${{ inputs.key }}
+        run: |
+          RULES="terraform-modules/naming/data/naming-rules.json"
+
+          # Validate workload
+          VALID_WORKLOAD=$(jq -r --arg wl "${INPUT_WORKLOAD}" \
+            '.workloads | index($wl) != null' "${RULES}")
+          if [[ "${VALID_WORKLOAD}" != "true" ]]; then
+            echo "::error::Unknown workload '${INPUT_WORKLOAD}'. Valid: $(jq -r '.workloads | join(", ")' ${RULES})"
+            exit 1
+          fi
+
+          # Validate each environment in the comma-separated list
+          IFS=',' read -ra ENV_ARRAY <<< "${INPUT_ENVS}"
+          for ENV in "${ENV_ARRAY[@]}"; do
+            ENV=$(echo "${ENV}" | xargs)  # trim whitespace
+            VALID_ENV=$(jq -r --arg env "${ENV}" \
+              '.environments | index($env) != null' "${RULES}")
+            if [[ "${VALID_ENV}" != "true" ]]; then
+              echo "::error::Unknown environment '${ENV}'. Valid: $(jq -r '.environments | join(", ")' ${RULES})"
+              exit 1
+            fi
+          done
+
+          # Validate resource_type
+          VALID_TYPE=$(jq -r --arg rt "${INPUT_TYPE}" \
+            '.abbreviations | has($rt)' "${RULES}")
+          if [[ "${VALID_TYPE}" != "true" ]]; then
+            echo "::error::Unknown resource_type '${INPUT_TYPE}'. Valid: $(jq -r '.abbreviations | keys | join(", ")' ${RULES})"
+            exit 1
+          fi
+
+          # Validate key format
+          if [[ ! "${INPUT_KEY}" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+            echo "::error::Key '${INPUT_KEY}' must be lowercase alphanumeric with optional hyphens"
+            exit 1
+          fi
+
+      - name: Validate against catalog definition
+        env:
+          INPUT_TYPE: ${{ inputs.resource_type }}
+          INPUT_PARAMS: ${{ inputs.parameters_json }}
+        run: |
+          CATALOG="catalog/${INPUT_TYPE}.json"
+          if [[ ! -f "${CATALOG}" ]]; then
+            echo "::error::No catalog definition for '${INPUT_TYPE}'"
+            exit 1
+          fi
+          echo "${INPUT_PARAMS}" | jq . > /dev/null 2>&1 || {
+            echo "::error::parameters_json is not valid JSON"
+            exit 1
+          }
+
+      - name: Check for duplicate keys in all target environments
+        env:
+          INPUT_WORKLOAD: ${{ inputs.workload }}
+          INPUT_ENVS: ${{ inputs.environments }}
+          INPUT_TYPE: ${{ inputs.resource_type }}
+          INPUT_KEY: ${{ inputs.key }}
+        run: |
+          MAP_KEY="${INPUT_TYPE}s"
+          IFS=',' read -ra ENV_ARRAY <<< "${INPUT_ENVS}"
+          for ENV in "${ENV_ARRAY[@]}"; do
+            ENV=$(echo "${ENV}" | xargs)
+            VALUES_FILE="workloads/${INPUT_WORKLOAD}/${ENV}.json"
+            if [[ ! -f "${VALUES_FILE}" ]]; then
+              echo "::notice::${VALUES_FILE} does not exist yet, will create"
+              continue
+            fi
+            EXISTS=$(jq -r --arg map "${MAP_KEY}" --arg key "${INPUT_KEY}" \
+              '.[$map] // {} | has($key)' "${VALUES_FILE}")
+            if [[ "${EXISTS}" == "true" ]]; then
+              echo "::error::Key '${INPUT_KEY}' already exists in ${MAP_KEY} of ${VALUES_FILE}"
+              exit 1
+            fi
+          done
+
+      - name: Generate resource name previews
+        id: naming
+        env:
+          INPUT_TYPE: ${{ inputs.resource_type }}
+          INPUT_WORKLOAD: ${{ inputs.workload }}
+          INPUT_ENVS: ${{ inputs.environments }}
+          INPUT_REGION: ${{ inputs.region }}
+          INPUT_KEY: ${{ inputs.key }}
+        run: |
+          RULES="terraform-modules/naming/data/naming-rules.json"
+          ABBR=$(jq -r --arg rt "${INPUT_TYPE}" '.abbreviations[$rt]' "${RULES}")
+
+          # Parse role and instance from key
+          if [[ "${INPUT_KEY}" =~ ^(.+)-([0-9]{2})$ ]]; then
+            ROLE="${BASH_REMATCH[1]}"
+            INSTANCE="${BASH_REMATCH[2]}"
+          else
+            ROLE="${INPUT_KEY}"
+            INSTANCE=""
+          fi
+
+          echo "### Generated Resource Names (preview)" >> "$GITHUB_STEP_SUMMARY"
+          PREVIEW_NAMES=""
+          IFS=',' read -ra ENV_ARRAY <<< "${INPUT_ENVS}"
+          for ENV in "${ENV_ARRAY[@]}"; do
+            ENV=$(echo "${ENV}" | xargs)
+            NAME="${ABBR}-${INPUT_REGION}-${ENV}-${INPUT_WORKLOAD}"
+            if [[ -n "${ROLE}" && "${ROLE}" != "default" ]]; then
+              NAME="${NAME}-${ROLE}"
+            fi
+            if [[ -n "${INSTANCE}" ]]; then
+              NAME="${NAME}-${INSTANCE}"
+            fi
+            echo "- \`${NAME}\` (${ENV})" >> "$GITHUB_STEP_SUMMARY"
+            if [[ -n "${PREVIEW_NAMES}" ]]; then
+              PREVIEW_NAMES="${PREVIEW_NAMES}, "
+            fi
+            PREVIEW_NAMES="${PREVIEW_NAMES}${NAME}"
+          done
+          echo "preview_names=${PREVIEW_NAMES}" >> "$GITHUB_OUTPUT"
+
+      - name: Add entry to all target environment files
+        env:
+          INPUT_WORKLOAD: ${{ inputs.workload }}
+          INPUT_ENVS: ${{ inputs.environments }}
+          INPUT_TYPE: ${{ inputs.resource_type }}
+          INPUT_KEY: ${{ inputs.key }}
+          INPUT_REGION: ${{ inputs.region }}
+          INPUT_PARAMS: ${{ inputs.parameters_json }}
+        run: |
+          MAP_KEY="${INPUT_TYPE}s"
+          ENTRY=$(echo "${INPUT_PARAMS}" | jq -c --arg loc "${INPUT_REGION}" '. + {location: $loc}')
+
+          IFS=',' read -ra ENV_ARRAY <<< "${INPUT_ENVS}"
+          for ENV in "${ENV_ARRAY[@]}"; do
+            ENV=$(echo "${ENV}" | xargs)
+            VALUES_FILE="workloads/${INPUT_WORKLOAD}/${ENV}.json"
+
+            if [[ ! -f "${VALUES_FILE}" ]]; then
+              echo '{}' > "${VALUES_FILE}"
+            fi
+
+            jq --arg map "${MAP_KEY}" \
+               --arg key "${INPUT_KEY}" \
+               --argjson entry "${ENTRY}" \
+               '.[$map] //= {} | .[$map][$key] = $entry' \
+               "${VALUES_FILE}" > "${VALUES_FILE}.tmp" \
+              && mv "${VALUES_FILE}.tmp" "${VALUES_FILE}"
+
+            jq '.' "${VALUES_FILE}" > "${VALUES_FILE}.tmp" \
+              && mv "${VALUES_FILE}.tmp" "${VALUES_FILE}"
+
+            echo "::notice::Added ${INPUT_KEY} to ${VALUES_FILE}"
+          done
+
+      - name: Create pull request
+        id: create-pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          INPUT_WORKLOAD: ${{ inputs.workload }}
+          INPUT_ENVS: ${{ inputs.environments }}
+          INPUT_TYPE: ${{ inputs.resource_type }}
+          INPUT_KEY: ${{ inputs.key }}
+          INPUT_REGION: ${{ inputs.region }}
+          INPUT_PARAMS: ${{ inputs.parameters_json }}
+          PREVIEW_NAMES: ${{ steps.naming.outputs.preview_names }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          ENV_SLUG=$(echo "${INPUT_ENVS}" | tr ',' '-')
+          BRANCH="request/${INPUT_WORKLOAD}-${ENV_SLUG}-${INPUT_TYPE}-${INPUT_KEY}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout -b "${BRANCH}"
+
+          IFS=',' read -ra ENV_ARRAY <<< "${INPUT_ENVS}"
+          for ENV in "${ENV_ARRAY[@]}"; do
+            ENV=$(echo "${ENV}" | xargs)
+            git add "workloads/${INPUT_WORKLOAD}/${ENV}.json"
+          done
+
+          git commit -m "feat: add ${INPUT_TYPE} ${INPUT_KEY} to ${INPUT_WORKLOAD} [${INPUT_ENVS}]"
+          git push origin "${BRANCH}"
+
+          PR_BODY=$(cat <<PREOF
+          ## Resource Request
+
+          **Type:** ${INPUT_TYPE}
+          **Key:** ${INPUT_KEY}
+          **Workload:** ${INPUT_WORKLOAD}
+          **Environments:** ${INPUT_ENVS}
+          **Region:** ${INPUT_REGION}
+          **Generated Names:** ${PREVIEW_NAMES}
+
+          ### Parameters
+          \`\`\`json
+          ${INPUT_PARAMS}
+          \`\`\`
+
+          Requested by: @${ACTOR}
+          PREOF
+          )
+
+          PR_URL=$(gh pr create \
+            --title "Request: ${INPUT_TYPE} ${INPUT_KEY} (${INPUT_WORKLOAD} ${INPUT_ENVS})" \
+            --body "${PR_BODY}" \
+            --base main \
+            --head "${BRANCH}")
+
+          echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        run: |
+          echo "### Pull Request Created" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **PR:** ${{ steps.create-pr.outputs.pr_url }}" >> "$GITHUB_STEP_SUMMARY"
