@@ -1,0 +1,195 @@
+name: "Terraform Plan"
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ['azure-deployments/requests/**']
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  TF_CLOUD_ORGANIZATION: "<TFC_ORG>"
+  TF_TOKEN_app_terraform_io: ${{ secrets.TFC_API_TOKEN }}
+
+jobs:
+  detect:
+    name: "Detect Changed Requests"
+    runs-on: ubuntu-latest
+    outputs:
+      directories: ${{ steps.dirs.outputs.directories }}
+      has_changes: ${{ steps.dirs.outputs.has_changes }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Find changed request directories
+        id: dirs
+        run: |
+          CHANGED_DIRS=$(git diff --name-only --diff-filter=ACMRT \
+            origin/${{ github.base_ref }}...HEAD -- 'azure-deployments/requests/' \
+            | xargs -I{} dirname {} \
+            | sort -u \
+            | grep '^azure-deployments/requests/' \
+            | jq -R -s -c 'split("\n") | map(select(length > 0))')
+
+          echo "directories=${CHANGED_DIRS}" >> "$GITHUB_OUTPUT"
+
+          if [[ "${CHANGED_DIRS}" == "[]" || -z "${CHANGED_DIRS}" ]]; then
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "### Detected Directories" >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`json" >> "$GITHUB_STEP_SUMMARY"
+          echo "${CHANGED_DIRS}" | jq '.' >> "$GITHUB_STEP_SUMMARY"
+          echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+
+  plan:
+    name: "Plan - ${{ matrix.directory }}"
+    needs: detect
+    if: needs.detect.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        directory: ${{ fromJson(needs.detect.outputs.directories) }}
+    concurrency:
+      group: tfplan-${{ matrix.directory }}
+      cancel-in-progress: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Parse directory name
+        id: parse
+        run: |
+          DIR_NAME=$(basename "${{ matrix.directory }}")
+
+          # Extract environment from the directory name
+          # Name format: st<region_code><environment><workload>[<role>][<instance>]
+          # We need to match known environments in the name
+          for ENV in prod nonprod uat qa test dev; do
+            if [[ "${DIR_NAME}" =~ ^st[a-z]+${ENV} ]]; then
+              ENVIRONMENT="${ENV}"
+              break
+            fi
+          done
+
+          if [[ -z "${ENVIRONMENT}" ]]; then
+            echo "::error::Could not determine environment from directory name: ${DIR_NAME}"
+            exit 1
+          fi
+
+          # Determine TFC project
+          if [[ "${ENVIRONMENT}" == "prod" ]]; then
+            TFC_PROJECT="prod"
+          else
+            TFC_PROJECT="nonprod"
+          fi
+
+          WORKSPACE_NAME="${DIR_NAME}"
+
+          echo "environment=${ENVIRONMENT}" >> "$GITHUB_OUTPUT"
+          echo "tfc_project=${TFC_PROJECT}" >> "$GITHUB_OUTPUT"
+          echo "workspace_name=${WORKSPACE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "dir_name=${DIR_NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform fmt check
+        run: |
+          cd "${{ matrix.directory }}"
+          terraform fmt -check -diff
+
+      - name: Terraform validate
+        run: |
+          cd "${{ matrix.directory }}"
+          terraform init -backend=false
+          terraform validate
+
+      - name: "TODO: tflint"
+        run: |
+          echo "::notice::TODO - Add tflint step for ${{ matrix.directory }}"
+          # TODO: Install and run tflint
+          # - uses: terraform-linters/setup-tflint@v4
+          # - run: tflint --init && tflint
+
+      - name: "TODO: checkov"
+        run: |
+          echo "::notice::TODO - Add checkov step for ${{ matrix.directory }}"
+          # TODO: Install and run checkov
+          # - uses: bridgecrewio/checkov-action@v12
+          #   with:
+          #     directory: ${{ matrix.directory }}
+
+      - name: Validate naming convention
+        run: |
+          DIR_NAME="${{ steps.parse.outputs.dir_name }}"
+          # Validate storage account name format: st<region_code><env><workload>[<role>][<instance>]
+          if [[ ! "${DIR_NAME}" =~ ^st[a-z]{2,4}(dev|test|qa|uat|nonprod|prod)[a-z0-9]+$ ]]; then
+            echo "::error::Directory name '${DIR_NAME}' does not match the naming convention"
+            exit 1
+          fi
+
+      - name: Create or update TFC workspace
+        uses: hashicorp/tfc-workflows-github/actions/workspace-create@v1.3.1
+        id: workspace
+        continue-on-error: true
+        with:
+          workspace: ${{ steps.parse.outputs.workspace_name }}
+          organization: ${{ env.TF_CLOUD_ORGANIZATION }}
+          project: ${{ steps.parse.outputs.tfc_project }}
+          execution_mode: "api-driven"
+
+      - name: Upload configuration
+        uses: hashicorp/tfc-workflows-github/actions/upload-configuration@v1.3.1
+        id: upload
+        with:
+          workspace: ${{ steps.parse.outputs.workspace_name }}
+          directory: ${{ matrix.directory }}
+          speculative: true
+
+      - name: Create speculative plan
+        uses: hashicorp/tfc-workflows-github/actions/create-run@v1.3.1
+        id: plan-run
+        with:
+          workspace: ${{ steps.parse.outputs.workspace_name }}
+          configuration_version: ${{ steps.upload.outputs.configuration_version_id }}
+          plan_only: true
+
+      - name: Get plan output
+        uses: hashicorp/tfc-workflows-github/actions/plan-output@v1.3.1
+        id: plan-output
+        with:
+          plan: ${{ steps.plan-run.outputs.plan_id }}
+
+      - name: Post plan summary as PR comment
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const workspace = '${{ steps.parse.outputs.workspace_name }}';
+            const add = '${{ steps.plan-output.outputs.add }}';
+            const change = '${{ steps.plan-output.outputs.change }}';
+            const destroy = '${{ steps.plan-output.outputs.destroy }}';
+            const runUrl = '${{ steps.plan-run.outputs.run_link }}';
+
+            const body = `### Terraform Plan: \`${workspace}\`
+
+            | Action  | Count |
+            |---------|-------|
+            | Add     | ${add} |
+            | Change  | ${change} |
+            | Destroy | ${destroy} |
+
+            [View full plan in HCP Terraform](${runUrl})`;
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: body
+            });
