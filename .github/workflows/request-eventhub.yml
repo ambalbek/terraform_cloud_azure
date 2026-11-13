@@ -111,13 +111,38 @@ jobs:
               exit 1
               ;;
           esac
-          DIR_NAME="evhns-${REGION_CODE}-${{ inputs.environment }}-${{ inputs.workload }}"
-          if [[ -n "${{ inputs.role }}" ]]; then DIR_NAME="${DIR_NAME}-${{ inputs.role }}"; fi
-          if [[ -n "${{ inputs.instance }}" ]]; then DIR_NAME="${DIR_NAME}-${{ inputs.instance }}"; fi
+          BASE_NAME="evhns-${REGION_CODE}-${{ inputs.environment }}-${{ inputs.workload }}"
+          if [[ -n "${{ inputs.role }}" ]]; then BASE_NAME="${BASE_NAME}-${{ inputs.role }}"; fi
+
+          INSTANCE="${{ inputs.instance }}"
+          if [[ -z "${INSTANCE}" ]]; then
+            # Auto-detect next available instance number
+            # Check existing request directories matching this base name
+            EXISTING=$(ls -d azure-deployments/requests/${BASE_NAME}* 2>/dev/null | grep -oP '\d{2}$' | sort -n | tail -1)
+            if [[ -n "${EXISTING}" ]]; then
+              # Increment the highest existing instance
+              INSTANCE=$(printf "%02d" $((10#${EXISTING} + 1)))
+              echo "::notice::Auto-assigned instance ${INSTANCE} (next after existing ${EXISTING})"
+            else
+              # Check if the base name (no instance) already exists
+              if [[ -d "azure-deployments/requests/${BASE_NAME}" ]]; then
+                INSTANCE="02"
+                echo "::notice::Base name exists without instance. Assigning instance 02 (rename existing to 01 recommended)"
+              fi
+              # If nothing exists, no instance suffix needed
+            fi
+          fi
+
+          DIR_NAME="${BASE_NAME}"
+          if [[ -n "${INSTANCE}" ]]; then DIR_NAME="${DIR_NAME}-${INSTANCE}"; fi
           echo "dir_name=${DIR_NAME}" >> "$GITHUB_OUTPUT"
           echo "region_code=${REGION_CODE}" >> "$GITHUB_OUTPUT"
+          echo "instance=${INSTANCE}" >> "$GITHUB_OUTPUT"
           echo "### Generated Resource Name" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Namespace:** \`${DIR_NAME}\`" >> "$GITHUB_STEP_SUMMARY"
+          if [[ -n "${INSTANCE}" ]]; then
+            echo "- **Instance:** \`${INSTANCE}\` (auto-detected)" >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: Create request directory
         run: mkdir -p "azure-deployments/requests/${{ steps.naming.outputs.dir_name }}"
@@ -221,7 +246,7 @@ jobs:
           ENVIRONMENT: ${{ inputs.environment }}
           REGION: ${{ inputs.region }}
           ROLE: ${{ inputs.role }}
-          INSTANCE: ${{ inputs.instance }}
+          INSTANCE: ${{ steps.naming.outputs.instance }}
           OWNER: ${{ inputs.owner }}
           COST_CENTER: ${{ inputs.cost_center }}
           NAMESPACE_SKU: ${{ inputs.namespace_sku }}
