@@ -65,15 +65,11 @@ jobs:
         run: |
           DIR_NAME=$(basename "${{ matrix.directory }}")
 
-          for ENV in prod nonprod uat qa test dev; do
-            if [[ "${DIR_NAME}" =~ ^st[a-z]+${ENV} ]]; then
-              ENVIRONMENT="${ENV}"
-              break
-            fi
-          done
+          # Name format: <abbrev>-<region>-<env>-<workload>[-role][-instance]
+          ENVIRONMENT=$(echo "${DIR_NAME}" | cut -d'-' -f3)
 
-          if [[ -z "${ENVIRONMENT}" ]]; then
-            echo "::error::Could not determine environment from directory name: ${DIR_NAME}"
+          if [[ ! "${ENVIRONMENT}" =~ ^(prod|nonprod|uat|qa|test|dev)$ ]]; then
+            echo "::error::Invalid environment '${ENVIRONMENT}' from directory name: ${DIR_NAME}"
             exit 1
           fi
 
@@ -107,15 +103,11 @@ jobs:
         run: |
           DIR_NAME=$(basename "${{ matrix.directory }}")
 
-          for ENV in prod nonprod uat qa test dev; do
-            if [[ "${DIR_NAME}" =~ ^st[a-z]+${ENV} ]]; then
-              ENVIRONMENT="${ENV}"
-              break
-            fi
-          done
+          # Name format: <abbrev>-<region>-<env>-<workload>[-role][-instance]
+          ENVIRONMENT=$(echo "${DIR_NAME}" | cut -d'-' -f3)
 
-          if [[ -z "${ENVIRONMENT}" ]]; then
-            echo "::error::Could not determine environment from directory name: ${DIR_NAME}"
+          if [[ ! "${ENVIRONMENT}" =~ ^(prod|nonprod|uat|qa|test|dev)$ ]]; then
+            echo "::error::Invalid environment '${ENVIRONMENT}' from directory name: ${DIR_NAME}"
             exit 1
           fi
 
