@@ -1,36 +1,71 @@
 variable "tfc_org" {
   type        = string
-  description = "HCP Terraform organization name"
+  description = "HCP Terraform organization name."
 }
 
 variable "tfc_token" {
   type        = string
   sensitive   = true
-  description = "HCP Terraform API token with organization-level access"
+  description = "HCP Terraform API token with organization-level access."
 }
 
 variable "tenant_id" {
   type        = string
-  description = "Azure AD Tenant ID"
+  description = "Azure AD tenant ID."
 }
 
-variable "subscriptions" {
-  type        = map(string)
-  description = "Map of project name to Azure Subscription ID (e.g. {prod = \"...\", nonprod = \"...\"})"
+variable "subscription_id" {
+  type        = string
+  description = "Azure subscription ID (single subscription)."
 
   validation {
-    condition     = alltrue([for k, v in var.subscriptions : can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", v))])
-    error_message = "Each subscription value must be a valid UUID."
+    condition     = can(regex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", var.subscription_id))
+    error_message = "Must be a valid UUID."
   }
 }
 
 variable "github_org" {
   type        = string
-  description = "GitHub organization name"
+  description = "GitHub organization name."
 }
 
 variable "github_repo" {
   type        = string
-  default     = "azure-deployments"
-  description = "GitHub repository name for the deployments repo"
+  default     = "terraform_cloud_azure"
+  description = "GitHub repository name."
+}
+
+variable "workloads" {
+  type        = map(set(string))
+  description = <<-EOT
+    Map of workload name to its environments.
+    Example: { sdwan = ["dev", "uat", "prod"] }
+  EOT
+
+  validation {
+    condition = alltrue(flatten([
+      for wl, envs in var.workloads : [
+        for env in envs : contains(["prod", "dev", "test", "qa", "uat", "nonprod"], env)
+      ]
+    ]))
+    error_message = "Each environment must be one of: prod, dev, test, qa, uat, nonprod."
+  }
+}
+
+variable "allowed_regions" {
+  type        = list(string)
+  description = "Azure regions allowed by policy."
+  default     = ["centralus", "canadacentral", "northcentralus", "southcentralus", "westeurope", "northeurope", "australiaeast", "australiasoutheast"]
+}
+
+variable "required_tags" {
+  type        = map(string)
+  description = "Tags required by Azure Policy (tag name → description)."
+  default = {
+    environment = "Environment code"
+    workload    = "Workload name"
+    owner       = "Resource owner"
+    cost_center = "Cost center"
+    managed_by  = "Management tool"
+  }
 }

@@ -1,31 +1,46 @@
 output "project_ids" {
-  description = "Map of project name to HCP Terraform project ID"
+  description = "Map of project name to HCP Terraform project ID."
   value       = { for k, v in tfe_project.this : k => v.id }
 }
 
+output "workspace_ids" {
+  description = "Map of workspace name to HCP Terraform workspace ID."
+  value       = { for k, v in tfe_workspace.this : k => v.id }
+}
+
 output "cicd_team_token" {
-  description = "API token for the CI/CD team (GitHub Actions service account)"
+  description = "API token for the CI/CD team (GitHub Actions)."
   value       = tfe_team_token.cicd.token
   sensitive   = true
 }
 
 output "plan_client_ids" {
-  description = "Map of project name to Azure AD plan identity client ID (Reader role)"
+  description = "Map of project name to plan identity client ID."
   value = {
-    for k, v in azuread_application.this : trimprefix(k, "") => v.client_id
-    if endswith(k, "-plan")
+    for k, v in local.identity_map : v.project => azuread_application.this[k].client_id
+    if v.phase == "plan"
   }
 }
 
 output "apply_client_ids" {
-  description = "Map of project name to Azure AD apply identity client ID (Contributor role)"
+  description = "Map of project name to apply identity client ID."
   value = {
-    for k, v in azuread_application.this : trimprefix(k, "") => v.client_id
-    if endswith(k, "-apply")
+    for k, v in local.identity_map : v.project => azuread_application.this[k].client_id
+    if v.phase == "apply"
   }
 }
 
-output "variable_set_ids" {
-  description = "Map of project name to Azure OIDC variable set ID"
-  value       = { for k, v in tfe_variable_set.azure : k => v.id }
+output "resource_group_ids" {
+  description = "Map of workspace name to resource group ID."
+  value       = { for k, v in azurerm_resource_group.this : k => v.id }
+}
+
+output "resource_group_names" {
+  description = "Map of workspace name to resource group name."
+  value       = { for k, v in azurerm_resource_group.this : k => v.name }
+}
+
+output "fed_cred_count" {
+  description = "Federated credential count per application (max 20)."
+  value       = local.fed_creds_per_app
 }

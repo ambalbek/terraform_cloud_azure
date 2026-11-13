@@ -2,14 +2,32 @@
 tfc_org   = "<TFC_ORG>"
 tfc_token = "<TFC_API_TOKEN>"
 
-# Azure
-tenant_id = "<TENANT_ID>"
-
-subscriptions = {
-  prod    = "<SUB_ID>"
-  nonprod = "<SUB_ID>"
-}
+# Azure (single subscription)
+tenant_id       = "<TENANT_ID>"
+subscription_id = "<SUB_ID>"
 
 # GitHub
-github_org  = "<GITHUB_ORG>"
-github_repo = "azure-deployments"
+github_org  = "ambalbek"
+github_repo = "terraform_cloud_azure"
+
+# Workloads and their environments
+workloads = {
+  sdwan = ["dev", "uat", "prod"]
+}
+
+# Allowed Azure regions
+allowed_regions = [
+  "centralus",
+  "canadacentral",
+  "northcentralus",
+  "southcentralus",
+]
+
+# Required tags (name → description for policy)
+required_tags = {
+  environment = "Environment code"
+  workload    = "Workload name"
+  owner       = "Resource owner"
+  cost_center = "Cost center"
+  managed_by  = "Management tool"
+}
