@@ -106,30 +106,29 @@ jobs:
             canadacentral)       REGION_CODE="cnc" ;;
             northcentralus)      REGION_CODE="ncus" ;;
             southcentralus)      REGION_CODE="scus" ;;
-            westeurope)          REGION_CODE="weu" ;;
-            northeurope)         REGION_CODE="neu" ;;
-            australiaeast)       REGION_CODE="aue" ;;
-            australiasoutheast)  REGION_CODE="ause" ;;
+            westeurope)          REGION_CODE="we" ;;
+            northeurope)         REGION_CODE="ne" ;;
+            australiaeast)       REGION_CODE="ae" ;;
+            australiasoutheast)  REGION_CODE="ase" ;;
             *)
               echo "::error::Unknown region: ${{ inputs.region }}"
               exit 1
               ;;
           esac
 
-          # Build resource name: st<region_code><environment><workload>[<role>][<instance>]
-          # Storage accounts cannot have hyphens, so strip them from workload
-          WORKLOAD=$(echo "${{ inputs.workload }}" | tr -d '-')
-          RESOURCE_NAME="st${REGION_CODE}${{ inputs.environment }}${WORKLOAD}"
+          # Build standard name: st-<region_code>-<environment>-<workload>[-<role>][-<instance>]
+          DIR_NAME="st-${REGION_CODE}-${{ inputs.environment }}-${{ inputs.workload }}"
 
           if [[ -n "${{ inputs.role }}" ]]; then
-            RESOURCE_NAME="${RESOURCE_NAME}${{ inputs.role }}"
+            DIR_NAME="${DIR_NAME}-${{ inputs.role }}"
           fi
 
           if [[ -n "${{ inputs.instance }}" ]]; then
-            RESOURCE_NAME="${RESOURCE_NAME}${{ inputs.instance }}"
+            DIR_NAME="${DIR_NAME}-${{ inputs.instance }}"
           fi
 
-          DIR_NAME="${RESOURCE_NAME}"
+          # Azure storage account name: same components, no hyphens (3-24 lowercase alphanumeric)
+          RESOURCE_NAME=$(echo "${DIR_NAME}" | tr -d '-')
 
           echo "resource_name=${RESOURCE_NAME}" >> "$GITHUB_OUTPUT"
           echo "dir_name=${DIR_NAME}" >> "$GITHUB_OUTPUT"
