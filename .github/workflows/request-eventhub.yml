@@ -82,6 +82,9 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
 
       - name: Validate inputs
         run: |
@@ -96,6 +99,8 @@ jobs:
 
       - name: Generate resource name
         id: naming
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           case "${{ inputs.region }}" in
             centralus)           REGION_CODE="cus" ;;
@@ -136,9 +141,16 @@ jobs:
           DIR_NAME="${BASE_NAME}"
           if [[ -n "${INSTANCE}" ]]; then DIR_NAME="${DIR_NAME}-${INSTANCE}"; fi
 
-          # Block duplicate requests
+          # Block duplicate requests — check existing directories on main
           if [[ -d "azure-deployments/requests/${DIR_NAME}" ]]; then
-            echo "::error::Request '${DIR_NAME}' already exists. Choose a different instance number or leave it empty for auto-assignment."
+            echo "::error::Request '${DIR_NAME}' already exists on main. Choose a different instance number or leave it empty for auto-assignment."
+            exit 1
+          fi
+
+          # Also check for open PRs with the same branch name
+          EXISTING_PR=$(gh pr list --head "request/${DIR_NAME}" --state open --json number --jq '.[0].number' 2>/dev/null || true)
+          if [[ -n "${EXISTING_PR}" ]]; then
+            echo "::error::An open PR already exists for '${DIR_NAME}' (PR #${EXISTING_PR}). Wait for it to be merged or closed."
             exit 1
           fi
 
