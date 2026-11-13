@@ -1,7 +1,6 @@
 terraform {
   cloud {
     organization = "<TFC_ORG>"
-    # Workspace is set dynamically by the CI workflow
   }
 
   required_providers {
@@ -25,7 +24,7 @@ module "naming" {
   source  = "app.terraform.io/<TFC_ORG>/naming/azurerm"
   version = "~> 1.0"
 
-  resource_type = "storage_account"
+  resource_type = "eventhub_namespace"
   location      = var.region
   environment   = var.environment
   workload      = var.workload
@@ -39,35 +38,37 @@ module "naming" {
 }
 
 ################################################################################
-# Storage Account (Azure Verified Module)
+# Event Hub
 ################################################################################
 
-module "storage_account" {
-  source  = "Azure/avm-res-storage-storageaccount/azurerm"
-  version = "~> 0.11"
+module "eventhub" {
+  source  = "app.terraform.io/<TFC_ORG>/eventhub/azurerm"
+  version = "~> 1.0"
 
-  name                          = module.naming.name
-  location                      = var.region
+  namespace_name                = module.naming.name
   resource_group_name           = var.resource_group_name
-  account_tier                  = var.account_tier
-  account_replication_type      = var.replication_type
-  account_kind                  = var.account_kind
-  access_tier                   = var.access_tier
+  location                      = var.region
+  namespace_sku                 = var.namespace_sku
+  capacity                      = var.capacity
+  auto_inflate_enabled          = var.auto_inflate_enabled
+  maximum_throughput_units      = var.maximum_throughput_units
   public_network_access_enabled = false
-  min_tls_version               = "TLS1_2"
-  shared_access_key_enabled     = false
-
-  tags = module.naming.tags
+  hubs                          = var.hubs
+  tags                          = module.naming.tags
 }
 
 ################################################################################
 # Outputs
 ################################################################################
 
-output "storage_account_name" {
-  value = module.storage_account.name
+output "namespace_name" {
+  value = module.eventhub.namespace_name
 }
 
-output "storage_account_id" {
-  value = module.storage_account.resource_id
+output "namespace_id" {
+  value = module.eventhub.namespace_id
+}
+
+output "hub_ids" {
+  value = module.eventhub.hub_ids
 }

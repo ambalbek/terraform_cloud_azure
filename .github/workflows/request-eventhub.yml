@@ -1,4 +1,4 @@
-name: "Request: Storage Account"
+name: "Request: Event Hub"
 
 on:
   workflow_dispatch:
@@ -38,22 +38,22 @@ on:
           - northeurope
           - australiaeast
           - australiasoutheast
-      account_tier:
+      namespace_sku:
         type: choice
-        description: 'Account Tier'
+        description: 'Namespace SKU'
         options:
           - Standard
           - Premium
         default: 'Standard'
-      replication_type:
+      capacity:
         type: choice
-        description: 'Replication'
+        description: 'Throughput units'
         options:
-          - LRS
-          - GRS
-          - ZRS
-          - GZRS
-        default: 'GRS'
+          - '1'
+          - '2'
+          - '4'
+          - '8'
+        default: '1'
       role:
         type: string
         required: false
@@ -77,7 +77,7 @@ permissions:
 
 jobs:
   create-request:
-    name: "Create Storage Account Request"
+    name: "Create Event Hub Request"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -85,13 +85,10 @@ jobs:
 
       - name: Validate inputs
         run: |
-          # Validate instance (empty or exactly 2 digits)
           if [[ -n "${{ inputs.instance }}" && ! "${{ inputs.instance }}" =~ ^[0-9]{2}$ ]]; then
             echo "::error::Instance must be empty or exactly 2 digits (e.g. 01)"
             exit 1
           fi
-
-          # Validate role (empty or lowercase alphanumeric)
           if [[ -n "${{ inputs.role }}" && ! "${{ inputs.role }}" =~ ^[a-z0-9]+$ ]]; then
             echo "::error::Role must be empty or lowercase alphanumeric characters only"
             exit 1
@@ -100,7 +97,6 @@ jobs:
       - name: Generate resource name
         id: naming
         run: |
-          # Map Azure region to short code
           case "${{ inputs.region }}" in
             centralus)           REGION_CODE="cus" ;;
             canadacentral)       REGION_CODE="cnc" ;;
@@ -116,8 +112,7 @@ jobs:
               ;;
           esac
 
-          # Build standard name: st-<region_code>-<environment>-<workload>[-<role>][-<instance>]
-          DIR_NAME="st-${REGION_CODE}-${{ inputs.environment }}-${{ inputs.workload }}"
+          DIR_NAME="evhns-${REGION_CODE}-${{ inputs.environment }}-${{ inputs.workload }}"
 
           if [[ -n "${{ inputs.role }}" ]]; then
             DIR_NAME="${DIR_NAME}-${{ inputs.role }}"
@@ -127,15 +122,11 @@ jobs:
             DIR_NAME="${DIR_NAME}-${{ inputs.instance }}"
           fi
 
-          # Azure storage account name: same components, no hyphens (3-24 lowercase alphanumeric)
-          RESOURCE_NAME=$(echo "${DIR_NAME}" | tr -d '-')
-
-          echo "resource_name=${RESOURCE_NAME}" >> "$GITHUB_OUTPUT"
           echo "dir_name=${DIR_NAME}" >> "$GITHUB_OUTPUT"
           echo "region_code=${REGION_CODE}" >> "$GITHUB_OUTPUT"
 
           echo "### Generated Resource Name" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Resource Name:** \`${RESOURCE_NAME}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Namespace:** \`${DIR_NAME}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Directory:** \`azure-deployments/requests/${DIR_NAME}/\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create request directory
@@ -167,7 +158,7 @@ module "naming" {
   source  = "app.terraform.io/<TFC_ORG>/naming/azurerm"
   version = "~> 1.0"
 
-  resource_type = "storage_account"
+  resource_type = "eventhub_namespace"
   location      = var.region
   environment   = var.environment
   workload      = var.workload
@@ -180,30 +171,32 @@ module "naming" {
   }
 }
 
-module "storage_account" {
-  source  = "Azure/avm-res-storage-storageaccount/azurerm"
-  version = "~> 0.11"
+module "eventhub" {
+  source  = "app.terraform.io/<TFC_ORG>/eventhub/azurerm"
+  version = "~> 1.0"
 
-  name                          = module.naming.name
-  location                      = var.region
+  namespace_name                = module.naming.name
   resource_group_name           = var.resource_group_name
-  account_tier                  = var.account_tier
-  account_replication_type      = var.replication_type
-  account_kind                  = var.account_kind
-  access_tier                   = var.access_tier
+  location                      = var.region
+  namespace_sku                 = var.namespace_sku
+  capacity                      = var.capacity
+  auto_inflate_enabled          = var.auto_inflate_enabled
+  maximum_throughput_units      = var.maximum_throughput_units
   public_network_access_enabled = false
-  min_tls_version               = "TLS1_2"
-  shared_access_key_enabled     = false
-
-  tags = module.naming.tags
+  hubs                          = var.hubs
+  tags                          = module.naming.tags
 }
 
-output "storage_account_name" {
-  value = module.storage_account.name
+output "namespace_name" {
+  value = module.eventhub.namespace_name
 }
 
-output "storage_account_id" {
-  value = module.storage_account.resource_id
+output "namespace_id" {
+  value = module.eventhub.namespace_id
+}
+
+output "hub_ids" {
+  value = module.eventhub.hub_ids
 }
 TFEOF
 
@@ -217,12 +210,39 @@ variable "region"              { type = string }
 variable "role"                { type = string default = null }
 variable "instance"            { type = string default = null }
 variable "resource_group_name" { type = string }
-variable "account_tier"        { type = string default = "Standard" }
-variable "replication_type"    { type = string default = "GRS" }
-variable "account_kind"        { type = string default = "StorageV2" }
-variable "access_tier"         { type = string default = "Hot" }
 variable "owner"               { type = string }
 variable "cost_center"         { type = string }
+
+variable "namespace_sku" {
+  type    = string
+  default = "Standard"
+}
+
+variable "capacity" {
+  type    = number
+  default = 1
+}
+
+variable "auto_inflate_enabled" {
+  type    = bool
+  default = false
+}
+
+variable "maximum_throughput_units" {
+  type    = number
+  default = 0
+}
+
+variable "hubs" {
+  type = map(object({
+    partition_count   = number
+    message_retention = number
+    consumer_groups = optional(map(object({
+      user_metadata = optional(string, "")
+    })), {})
+  }))
+  default = {}
+}
 TFEOF
 
       - name: Write terraform.tfvars
@@ -235,12 +255,15 @@ region              = "${{ inputs.region }}"
 role                = "${{ inputs.role }}"
 instance            = "${{ inputs.instance }}"
 resource_group_name = "rg-${{ steps.naming.outputs.region_code }}-${{ inputs.environment }}-${{ inputs.workload }}"
-account_tier        = "${{ inputs.account_tier }}"
-replication_type    = "${{ inputs.replication_type }}"
-account_kind        = "StorageV2"
-access_tier         = "Hot"
 owner               = "${{ inputs.owner }}"
 cost_center         = "${{ inputs.cost_center }}"
+
+namespace_sku            = "${{ inputs.namespace_sku }}"
+capacity                 = ${{ inputs.capacity }}
+auto_inflate_enabled     = false
+maximum_throughput_units = 0
+
+hubs = {}
 TFVARSEOF
 
       - name: Create pull request
@@ -255,23 +278,23 @@ TFVARSEOF
 
           git checkout -b "${BRANCH}"
           git add "azure-deployments/requests/${{ steps.naming.outputs.dir_name }}/"
-          git commit -m "feat: request storage account ${{ steps.naming.outputs.resource_name }}"
+          git commit -m "feat: request event hub ${{ steps.naming.outputs.dir_name }}"
           git push origin "${BRANCH}"
 
           PR_URL=$(gh pr create \
-            --title "Request: Storage Account ${{ steps.naming.outputs.resource_name }}" \
-            --body "## Storage Account Request
+            --title "Request: Event Hub ${{ steps.naming.outputs.dir_name }}" \
+            --body "## Event Hub Request
 
-          **Resource Name:** \`${{ steps.naming.outputs.resource_name }}\`
-          **Workload:** ${{ inputs.workload }}
-          **Environment:** ${{ inputs.environment }}
-          **Region:** ${{ inputs.region }}
-          **Account Tier:** ${{ inputs.account_tier }}
-          **Replication:** ${{ inputs.replication_type }}
-          **Owner:** ${{ inputs.owner }}
-          **Cost Center:** ${{ inputs.cost_center }}
+**Namespace:** \`${{ steps.naming.outputs.dir_name }}\`
+**Workload:** ${{ inputs.workload }}
+**Environment:** ${{ inputs.environment }}
+**Region:** ${{ inputs.region }}
+**SKU:** ${{ inputs.namespace_sku }}
+**Capacity:** ${{ inputs.capacity }}
+**Owner:** ${{ inputs.owner }}
+**Cost Center:** ${{ inputs.cost_center }}
 
-          Requested by: @${{ github.actor }}" \
+Requested by: @${{ github.actor }}" \
             --base main \
             --head "${BRANCH}")
 

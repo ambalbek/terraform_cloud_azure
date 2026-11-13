@@ -15,7 +15,8 @@
     "virtual_hub": "vhub",
     "load_balancer_external": "lbe",
     "load_balancer_internal": "lbi",
-    "availability_set": "avail"
+    "availability_set": "avail",
+    "eventhub_namespace": "evhns"
   },
   "region_code_overrides": {},
   "environments": [
