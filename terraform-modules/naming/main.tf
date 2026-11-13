@@ -1,10 +1,30 @@
+################################################################################
+# AVM Regions Utility — authoritative source for geo_code
+################################################################################
+
+module "regions" {
+  source  = "Azure/avm-utl-regions/azurerm"
+  version = "~> 0.13"
+
+  location         = var.location
+  enable_telemetry = false
+}
+
+################################################################################
+# Naming Logic
+################################################################################
+
 locals {
   rules = jsondecode(file("${path.module}/data/naming-rules.json"))
 
   abbreviation = local.rules.abbreviations[var.resource_type]
-  region_code  = lookup(local.rules.region_codes, var.location, "")
 
-  # Build the list of name components, filtering out nulls
+  # Use AVM regions utility for geo_code; fall back to JSON override if needed
+  avm_region_code = try(module.regions.regions_by_name[var.location].geo_code, null)
+  json_override   = lookup(local.rules.region_code_overrides, var.location, null)
+  region_code     = coalesce(local.json_override, local.avm_region_code, "")
+
+  # Build the list of name components, filtering out nulls/empty strings
   components = compact([
     local.abbreviation,
     local.region_code,
@@ -42,10 +62,10 @@ locals {
   }
 }
 
-# Validate that the region code was found
+# Validate that a region code was resolved
 check "region_code_exists" {
   assert {
     condition     = local.region_code != ""
-    error_message = "No region code found for location '${var.location}'. Add it to naming-rules.json region_codes."
+    error_message = "No geo_code found for location '${var.location}'. Contact the Cloud COE to add this region."
   }
 }

@@ -144,100 +144,104 @@ jobs:
       - name: Write main.tf
         run: |
           DIR="azure-deployments/requests/${{ steps.naming.outputs.dir_name }}"
-          cat > "${DIR}/main.tf" << 'TFEOF'
-          terraform {
-            cloud {
-              organization = "<TFC_ORG>"
-              # Workspace is set dynamically by the CI workflow
-            }
+          cat > "${DIR}/main.tf" <<'TFEOF'
+terraform {
+  cloud {
+    organization = "<TFC_ORG>"
+  }
 
-            required_providers {
-              azurerm = {
-                source  = "hashicorp/azurerm"
-                version = "~> 4.0"
-              }
-            }
-          }
+  required_providers {
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "~> 4.0"
+    }
+  }
+}
 
-          provider "azurerm" {
-            features {}
-            use_oidc = true
-          }
+provider "azurerm" {
+  features {}
+  use_oidc = true
+}
 
-          module "storage_account" {
-            source  = "app.terraform.io/<TFC_ORG>/storage-account/azurerm"
-            version = "~> 1.0"
+module "naming" {
+  source  = "app.terraform.io/<TFC_ORG>/naming/azurerm"
+  version = "~> 1.0"
 
-            workload                   = var.workload
-            environment                = var.environment
-            location                   = var.region
-            role                       = var.role
-            instance                   = var.instance
-            resource_group_name        = var.resource_group_name
-            account_tier               = var.account_tier
-            account_replication_type   = var.replication_type
-            account_kind               = var.account_kind
-            access_tier                = var.access_tier
-            enable_versioning          = var.enable_versioning
-            enable_blob_soft_delete    = var.enable_blob_soft_delete
-            soft_delete_retention_days = var.soft_delete_retention_days
-            enable_diagnostics         = var.enable_diagnostics
-            owner                      = var.owner
-            cost_center                = var.cost_center
-          }
+  resource_type = "storage_account"
+  location      = var.region
+  environment   = var.environment
+  workload      = var.workload
+  role          = var.role
+  instance      = var.instance
 
-          output "storage_account_name" {
-            value = module.storage_account.name
-          }
+  tags = {
+    owner       = var.owner
+    cost_center = var.cost_center
+  }
+}
 
-          output "storage_account_id" {
-            value = module.storage_account.id
-          }
-          TFEOF
+module "storage_account" {
+  source  = "Azure/avm-res-storage-storageaccount/azurerm"
+  version = "~> 0.11"
+
+  name                          = module.naming.name
+  location                      = var.region
+  resource_group_name           = var.resource_group_name
+  account_tier                  = var.account_tier
+  account_replication_type      = var.replication_type
+  account_kind                  = var.account_kind
+  access_tier                   = var.access_tier
+  public_network_access_enabled = false
+  min_tls_version               = "TLS1_2"
+  shared_access_key_enabled     = false
+
+  tags = module.naming.tags
+}
+
+output "storage_account_name" {
+  value = module.storage_account.name
+}
+
+output "storage_account_id" {
+  value = module.storage_account.resource_id
+}
+TFEOF
 
       - name: Write variables.tf
         run: |
           DIR="azure-deployments/requests/${{ steps.naming.outputs.dir_name }}"
-          cat > "${DIR}/variables.tf" << 'TFEOF'
-          variable "workload"                   { type = string }
-          variable "environment"                { type = string }
-          variable "region"                     { type = string }
-          variable "role"                       { type = string  default = null }
-          variable "instance"                   { type = string  default = null }
-          variable "resource_group_name"        { type = string }
-          variable "account_tier"               { type = string  default = "Standard" }
-          variable "replication_type"           { type = string  default = "GRS" }
-          variable "account_kind"               { type = string  default = "StorageV2" }
-          variable "access_tier"                { type = string  default = "Hot" }
-          variable "enable_versioning"          { type = bool    default = true }
-          variable "enable_blob_soft_delete"    { type = bool    default = true }
-          variable "soft_delete_retention_days" { type = number  default = 30 }
-          variable "enable_diagnostics"         { type = bool    default = false }
-          variable "owner"                      { type = string }
-          variable "cost_center"                { type = string }
-          TFEOF
+          cat > "${DIR}/variables.tf" <<'TFEOF'
+variable "workload"            { type = string }
+variable "environment"         { type = string }
+variable "region"              { type = string }
+variable "role"                { type = string default = null }
+variable "instance"            { type = string default = null }
+variable "resource_group_name" { type = string }
+variable "account_tier"        { type = string default = "Standard" }
+variable "replication_type"    { type = string default = "GRS" }
+variable "account_kind"        { type = string default = "StorageV2" }
+variable "access_tier"         { type = string default = "Hot" }
+variable "owner"               { type = string }
+variable "cost_center"         { type = string }
+TFEOF
 
       - name: Write terraform.tfvars
         run: |
           DIR="azure-deployments/requests/${{ steps.naming.outputs.dir_name }}"
-          cat > "${DIR}/terraform.tfvars" << TFVARSEOF
-          workload                   = "${{ inputs.workload }}"
-          environment                = "${{ inputs.environment }}"
-          region                     = "${{ inputs.region }}"
-          role                       = "${{ inputs.role }}"
-          instance                   = "${{ inputs.instance }}"
-          resource_group_name        = "rg-${{ steps.naming.outputs.region_code }}-${{ inputs.environment }}-${{ inputs.workload }}"
-          account_tier               = "${{ inputs.account_tier }}"
-          replication_type           = "${{ inputs.replication_type }}"
-          account_kind               = "StorageV2"
-          access_tier                = "Hot"
-          enable_versioning          = true
-          enable_blob_soft_delete    = true
-          soft_delete_retention_days = 30
-          enable_diagnostics         = false
-          owner                      = "${{ inputs.owner }}"
-          cost_center                = "${{ inputs.cost_center }}"
-          TFVARSEOF
+          cat > "${DIR}/terraform.tfvars" <<TFVARSEOF
+workload            = "${{ inputs.workload }}"
+environment         = "${{ inputs.environment }}"
+region              = "${{ inputs.region }}"
+role                = "${{ inputs.role }}"
+instance            = "${{ inputs.instance }}"
+resource_group_name = "rg-${{ steps.naming.outputs.region_code }}-${{ inputs.environment }}-${{ inputs.workload }}"
+account_tier        = "${{ inputs.account_tier }}"
+replication_type    = "${{ inputs.replication_type }}"
+account_kind        = "StorageV2"
+access_tier         = "Hot"
+owner               = "${{ inputs.owner }}"
+cost_center         = "${{ inputs.cost_center }}"
+TFVARSEOF
 
       - name: Create pull request
         id: create-pr

@@ -17,32 +17,57 @@ provider "azurerm" {
   use_oidc = true
 }
 
-module "storage_account" {
-  source  = "app.terraform.io/<TFC_ORG>/storage-account/azurerm"
+################################################################################
+# Naming
+################################################################################
+
+module "naming" {
+  source  = "app.terraform.io/<TFC_ORG>/naming/azurerm"
   version = "~> 1.0"
 
-  workload                   = var.workload
-  environment                = var.environment
-  location                   = var.region
-  role                       = var.role
-  instance                   = var.instance
-  resource_group_name        = var.resource_group_name
-  account_tier               = var.account_tier
-  account_replication_type   = var.replication_type
-  account_kind               = var.account_kind
-  access_tier                = var.access_tier
-  enable_versioning          = var.enable_versioning
-  enable_blob_soft_delete    = var.enable_blob_soft_delete
-  soft_delete_retention_days = var.soft_delete_retention_days
-  enable_diagnostics         = var.enable_diagnostics
-  owner                      = var.owner
-  cost_center                = var.cost_center
+  resource_type = "storage_account"
+  location      = var.region
+  environment   = var.environment
+  workload      = var.workload
+  role          = var.role
+  instance      = var.instance
+
+  tags = {
+    owner       = var.owner
+    cost_center = var.cost_center
+  }
 }
+
+################################################################################
+# Storage Account (Azure Verified Module)
+################################################################################
+
+module "storage_account" {
+  source  = "Azure/avm-res-storage-storageaccount/azurerm"
+  version = "~> 0.11"
+
+  name                          = module.naming.name
+  location                      = var.region
+  resource_group_name           = var.resource_group_name
+  account_tier                  = var.account_tier
+  account_replication_type      = var.replication_type
+  account_kind                  = var.account_kind
+  access_tier                   = var.access_tier
+  public_network_access_enabled = false
+  min_tls_version               = "TLS1_2"
+  shared_access_key_enabled     = false
+
+  tags = module.naming.tags
+}
+
+################################################################################
+# Outputs
+################################################################################
 
 output "storage_account_name" {
   value = module.storage_account.name
 }
 
 output "storage_account_id" {
-  value = module.storage_account.id
+  value = module.storage_account.resource_id
 }

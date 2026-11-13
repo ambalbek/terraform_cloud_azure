@@ -17,16 +17,7 @@
     "load_balancer_internal": "lbi",
     "availability_set": "avail"
   },
-  "region_codes": {
-    "centralus": "cus",
-    "canadacentral": "cnc",
-    "northcentralus": "ncus",
-    "southcentralus": "scus",
-    "westeurope": "we",
-    "northeurope": "ne",
-    "australiaeast": "ae",
-    "australiasoutheast": "ase"
-  },
+  "region_code_overrides": {},
   "environments": [
     "prod",
     "dev",
@@ -43,10 +34,6 @@
     "core",
     "app"
   ],
-  "max_lengths": {
-    "storage_account": 24,
-    "key_vault": 24
-  },
   "special_rules": {
     "storage_account": {
       "max_length": 24,
