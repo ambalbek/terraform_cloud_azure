@@ -1,0 +1,13 @@
+workload            = "sdwan"
+environment         = "dev"
+region              = "centralus"
+role                = "db"db
+instance            = "02"02
+resource_group_name = "rg-cus-dev-sdwan"
+owner               = "it-ccoe"
+cost_center         = "vantage-dc"
+namespace_sku            = "Standard"
+capacity                 = 1
+auto_inflate_enabled     = false
+maximum_throughput_units = 0
+hubs = {}
