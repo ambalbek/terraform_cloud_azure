@@ -111,193 +111,166 @@ jobs:
               exit 1
               ;;
           esac
-
           DIR_NAME="evhns-${REGION_CODE}-${{ inputs.environment }}-${{ inputs.workload }}"
-
-          if [[ -n "${{ inputs.role }}" ]]; then
-            DIR_NAME="${DIR_NAME}-${{ inputs.role }}"
-          fi
-
-          if [[ -n "${{ inputs.instance }}" ]]; then
-            DIR_NAME="${DIR_NAME}-${{ inputs.instance }}"
-          fi
-
+          if [[ -n "${{ inputs.role }}" ]]; then DIR_NAME="${DIR_NAME}-${{ inputs.role }}"; fi
+          if [[ -n "${{ inputs.instance }}" ]]; then DIR_NAME="${DIR_NAME}-${{ inputs.instance }}"; fi
           echo "dir_name=${DIR_NAME}" >> "$GITHUB_OUTPUT"
           echo "region_code=${REGION_CODE}" >> "$GITHUB_OUTPUT"
-
           echo "### Generated Resource Name" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Namespace:** \`${DIR_NAME}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Directory:** \`azure-deployments/requests/${DIR_NAME}/\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Create request directory
         run: mkdir -p "azure-deployments/requests/${{ steps.naming.outputs.dir_name }}"
 
       - name: Write main.tf
+        env:
+          DIR_NAME: ${{ steps.naming.outputs.dir_name }}
         run: |
-          DIR="azure-deployments/requests/${{ steps.naming.outputs.dir_name }}"
-          cat > "${DIR}/main.tf" <<'TFEOF'
-terraform {
-  cloud {
-    organization = "<TFC_ORG>"
-  }
-
-  required_providers {
-    azurerm = {
-      source  = "hashicorp/azurerm"
-      version = "~> 4.0"
-    }
-  }
-}
-
-provider "azurerm" {
-  features {}
-  use_oidc = true
-}
-
-module "naming" {
-  source  = "app.terraform.io/<TFC_ORG>/naming/azurerm"
-  version = "~> 1.0"
-
-  resource_type = "eventhub_namespace"
-  location      = var.region
-  environment   = var.environment
-  workload      = var.workload
-  role          = var.role
-  instance      = var.instance
-
-  tags = {
-    owner       = var.owner
-    cost_center = var.cost_center
-  }
-}
-
-module "eventhub" {
-  source  = "app.terraform.io/<TFC_ORG>/eventhub/azurerm"
-  version = "~> 1.0"
-
-  namespace_name                = module.naming.name
-  resource_group_name           = var.resource_group_name
-  location                      = var.region
-  namespace_sku                 = var.namespace_sku
-  capacity                      = var.capacity
-  auto_inflate_enabled          = var.auto_inflate_enabled
-  maximum_throughput_units      = var.maximum_throughput_units
-  public_network_access_enabled = false
-  hubs                          = var.hubs
-  tags                          = module.naming.tags
-}
-
-output "namespace_name" {
-  value = module.eventhub.namespace_name
-}
-
-output "namespace_id" {
-  value = module.eventhub.namespace_id
-}
-
-output "hub_ids" {
-  value = module.eventhub.hub_ids
-}
-TFEOF
+          DIR="azure-deployments/requests/${DIR_NAME}"
+          printf '%s\n' \
+            'terraform {' \
+            '  cloud {' \
+            '    organization = "<TFC_ORG>"' \
+            '  }' \
+            '  required_providers {' \
+            '    azurerm = {' \
+            '      source  = "hashicorp/azurerm"' \
+            '      version = "~> 4.0"' \
+            '    }' \
+            '  }' \
+            '}' \
+            '' \
+            'provider "azurerm" {' \
+            '  features {}' \
+            '  use_oidc = true' \
+            '}' \
+            '' \
+            'module "naming" {' \
+            '  source  = "app.terraform.io/<TFC_ORG>/naming/azurerm"' \
+            '  version = "~> 1.0"' \
+            '' \
+            '  resource_type = "eventhub_namespace"' \
+            '  location      = var.region' \
+            '  environment   = var.environment' \
+            '  workload      = var.workload' \
+            '  role          = var.role' \
+            '  instance      = var.instance' \
+            '' \
+            '  tags = {' \
+            '    owner       = var.owner' \
+            '    cost_center = var.cost_center' \
+            '  }' \
+            '}' \
+            '' \
+            'module "eventhub" {' \
+            '  source  = "app.terraform.io/<TFC_ORG>/eventhub/azurerm"' \
+            '  version = "~> 1.0"' \
+            '' \
+            '  namespace_name                = module.naming.name' \
+            '  resource_group_name           = var.resource_group_name' \
+            '  location                      = var.region' \
+            '  namespace_sku                 = var.namespace_sku' \
+            '  capacity                      = var.capacity' \
+            '  auto_inflate_enabled          = var.auto_inflate_enabled' \
+            '  maximum_throughput_units      = var.maximum_throughput_units' \
+            '  public_network_access_enabled = false' \
+            '  hubs                          = var.hubs' \
+            '  tags                          = module.naming.tags' \
+            '}' \
+            '' \
+            'output "namespace_name" { value = module.eventhub.namespace_name }' \
+            'output "namespace_id"   { value = module.eventhub.namespace_id }' \
+            'output "hub_ids"        { value = module.eventhub.hub_ids }' \
+            > "${DIR}/main.tf"
 
       - name: Write variables.tf
+        env:
+          DIR_NAME: ${{ steps.naming.outputs.dir_name }}
         run: |
-          DIR="azure-deployments/requests/${{ steps.naming.outputs.dir_name }}"
-          cat > "${DIR}/variables.tf" <<'TFEOF'
-variable "workload"            { type = string }
-variable "environment"         { type = string }
-variable "region"              { type = string }
-variable "role"                { type = string default = null }
-variable "instance"            { type = string default = null }
-variable "resource_group_name" { type = string }
-variable "owner"               { type = string }
-variable "cost_center"         { type = string }
-
-variable "namespace_sku" {
-  type    = string
-  default = "Standard"
-}
-
-variable "capacity" {
-  type    = number
-  default = 1
-}
-
-variable "auto_inflate_enabled" {
-  type    = bool
-  default = false
-}
-
-variable "maximum_throughput_units" {
-  type    = number
-  default = 0
-}
-
-variable "hubs" {
-  type = map(object({
-    partition_count   = number
-    message_retention = number
-    consumer_groups = optional(map(object({
-      user_metadata = optional(string, "")
-    })), {})
-  }))
-  default = {}
-}
-TFEOF
+          DIR="azure-deployments/requests/${DIR_NAME}"
+          printf '%s\n' \
+            'variable "workload"            { type = string }' \
+            'variable "environment"         { type = string }' \
+            'variable "region"              { type = string }' \
+            'variable "role"                { type = string default = null }' \
+            'variable "instance"            { type = string default = null }' \
+            'variable "resource_group_name" { type = string }' \
+            'variable "owner"               { type = string }' \
+            'variable "cost_center"         { type = string }' \
+            'variable "namespace_sku"           { type = string default = "Standard" }' \
+            'variable "capacity"                { type = number default = 1 }' \
+            'variable "auto_inflate_enabled"    { type = bool   default = false }' \
+            'variable "maximum_throughput_units" { type = number default = 0 }' \
+            'variable "hubs" {' \
+            '  type = map(object({' \
+            '    partition_count   = number' \
+            '    message_retention = number' \
+            '    consumer_groups = optional(map(object({' \
+            '      user_metadata = optional(string, "")' \
+            '    })), {})' \
+            '  }))' \
+            '  default = {}' \
+            '}' \
+            > "${DIR}/variables.tf"
 
       - name: Write terraform.tfvars
+        env:
+          DIR_NAME: ${{ steps.naming.outputs.dir_name }}
+          REGION_CODE: ${{ steps.naming.outputs.region_code }}
+          WORKLOAD: ${{ inputs.workload }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          REGION: ${{ inputs.region }}
+          ROLE: ${{ inputs.role }}
+          INSTANCE: ${{ inputs.instance }}
+          OWNER: ${{ inputs.owner }}
+          COST_CENTER: ${{ inputs.cost_center }}
+          NAMESPACE_SKU: ${{ inputs.namespace_sku }}
+          CAPACITY: ${{ inputs.capacity }}
         run: |
-          DIR="azure-deployments/requests/${{ steps.naming.outputs.dir_name }}"
-          cat > "${DIR}/terraform.tfvars" <<TFVARSEOF
-workload            = "${{ inputs.workload }}"
-environment         = "${{ inputs.environment }}"
-region              = "${{ inputs.region }}"
-role                = "${{ inputs.role }}"
-instance            = "${{ inputs.instance }}"
-resource_group_name = "rg-${{ steps.naming.outputs.region_code }}-${{ inputs.environment }}-${{ inputs.workload }}"
-owner               = "${{ inputs.owner }}"
-cost_center         = "${{ inputs.cost_center }}"
-
-namespace_sku            = "${{ inputs.namespace_sku }}"
-capacity                 = ${{ inputs.capacity }}
-auto_inflate_enabled     = false
-maximum_throughput_units = 0
-
-hubs = {}
-TFVARSEOF
+          DIR="azure-deployments/requests/${DIR_NAME}"
+          cat > "${DIR}/terraform.tfvars" << EOF
+          workload            = "${WORKLOAD}"
+          environment         = "${ENVIRONMENT}"
+          region              = "${REGION}"
+          role                = ${ROLE:+\"$ROLE\"}${ROLE:-null}
+          instance            = ${INSTANCE:+\"$INSTANCE\"}${INSTANCE:-null}
+          resource_group_name = "rg-${REGION_CODE}-${ENVIRONMENT}-${WORKLOAD}"
+          owner               = "${OWNER}"
+          cost_center         = "${COST_CENTER}"
+          namespace_sku            = "${NAMESPACE_SKU}"
+          capacity                 = ${CAPACITY}
+          auto_inflate_enabled     = false
+          maximum_throughput_units = 0
+          hubs = {}
+          EOF
 
       - name: Create pull request
         id: create-pr
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DIR_NAME: ${{ steps.naming.outputs.dir_name }}
         run: |
-          BRANCH="request/${{ steps.naming.outputs.dir_name }}"
-
+          BRANCH="request/${DIR_NAME}"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
           git checkout -b "${BRANCH}"
-          git add "azure-deployments/requests/${{ steps.naming.outputs.dir_name }}/"
-          git commit -m "feat: request event hub ${{ steps.naming.outputs.dir_name }}"
+          git add "azure-deployments/requests/${DIR_NAME}/"
+          git commit -m "feat: request event hub ${DIR_NAME}"
           git push origin "${BRANCH}"
-
           PR_URL=$(gh pr create \
-            --title "Request: Event Hub ${{ steps.naming.outputs.dir_name }}" \
+            --title "Request: Event Hub ${DIR_NAME}" \
             --body "## Event Hub Request
-
-**Namespace:** \`${{ steps.naming.outputs.dir_name }}\`
-**Workload:** ${{ inputs.workload }}
-**Environment:** ${{ inputs.environment }}
-**Region:** ${{ inputs.region }}
-**SKU:** ${{ inputs.namespace_sku }}
-**Capacity:** ${{ inputs.capacity }}
-**Owner:** ${{ inputs.owner }}
-**Cost Center:** ${{ inputs.cost_center }}
-
-Requested by: @${{ github.actor }}" \
+          **Namespace:** \`${DIR_NAME}\`
+          **Workload:** ${{ inputs.workload }}
+          **Environment:** ${{ inputs.environment }}
+          **Region:** ${{ inputs.region }}
+          **SKU:** ${{ inputs.namespace_sku }}
+          **Capacity:** ${{ inputs.capacity }}
+          **Owner:** ${{ inputs.owner }}
+          **Cost Center:** ${{ inputs.cost_center }}
+          Requested by: @${{ github.actor }}" \
             --base main \
             --head "${BRANCH}")
-
           echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
 
       - name: Add PR to job summary
