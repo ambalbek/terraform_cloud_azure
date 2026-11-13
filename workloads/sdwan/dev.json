@@ -1,0 +1,24 @@
+{
+  "eventhub_namespaces": {
+    "db-01": {
+      "location": "centralus",
+      "namespace_sku": "Standard",
+      "capacity": 1,
+      "auto_inflate_enabled": false,
+      "maximum_throughput_units": 0,
+      "owner": "it-ccoe",
+      "cost_center": "vantage-dc",
+      "hubs": {}
+    },
+    "default": {
+      "location": "northcentralus",
+      "namespace_sku": "Standard",
+      "capacity": 1,
+      "auto_inflate_enabled": false,
+      "maximum_throughput_units": 0,
+      "owner": "cloud-coe",
+      "cost_center": "CC-1234",
+      "hubs": {}
+    }
+  }
+}

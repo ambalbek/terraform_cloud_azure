@@ -1,0 +1,42 @@
+{
+  "resource_type": "eventhub_namespace",
+  "abbreviation_key": "eventhub_namespace",
+  "module_source": "app.terraform.io/<TFC_ORG>/eventhub/azurerm",
+  "module_version": "~> 1.0",
+  "description": "Azure Event Hub Namespace",
+  "parameters": {
+    "namespace_sku": {
+      "type": "string",
+      "description": "Namespace SKU",
+      "allowed": ["Standard", "Premium"],
+      "default": "Standard"
+    },
+    "capacity": {
+      "type": "number",
+      "description": "Throughput units (Standard) or processing units (Premium)",
+      "default": 1,
+      "min": 1,
+      "max": 40
+    },
+    "auto_inflate_enabled": {
+      "type": "boolean",
+      "description": "Enable auto-inflate for Standard SKU",
+      "default": false
+    },
+    "maximum_throughput_units": {
+      "type": "number",
+      "description": "Maximum throughput units when auto-inflate is enabled",
+      "default": 0,
+      "min": 0,
+      "max": 40
+    },
+    "hubs": {
+      "type": "map",
+      "description": "Map of Event Hub name to config (partition_count, message_retention, consumer_groups)",
+      "default": {}
+    }
+  },
+  "secure_defaults": {
+    "public_network_access_enabled": false
+  }
+}
