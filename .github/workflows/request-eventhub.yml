@@ -135,6 +135,13 @@ jobs:
 
           DIR_NAME="${BASE_NAME}"
           if [[ -n "${INSTANCE}" ]]; then DIR_NAME="${DIR_NAME}-${INSTANCE}"; fi
+
+          # Block duplicate requests
+          if [[ -d "azure-deployments/requests/${DIR_NAME}" ]]; then
+            echo "::error::Request '${DIR_NAME}' already exists. Choose a different instance number or leave it empty for auto-assignment."
+            exit 1
+          fi
+
           echo "dir_name=${DIR_NAME}" >> "$GITHUB_OUTPUT"
           echo "region_code=${REGION_CODE}" >> "$GITHUB_OUTPUT"
           echo "instance=${INSTANCE}" >> "$GITHUB_OUTPUT"
