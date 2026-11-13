@@ -272,12 +272,14 @@ jobs:
           CAPACITY: ${{ inputs.capacity }}
         run: |
           DIR="azure-deployments/requests/${DIR_NAME}"
+          if [ -n "${ROLE}" ]; then ROLE_VAL="\"${ROLE}\""; else ROLE_VAL="null"; fi
+          if [ -n "${INSTANCE}" ]; then INST_VAL="\"${INSTANCE}\""; else INST_VAL="null"; fi
           cat > "${DIR}/terraform.tfvars" << EOF
           workload            = "${WORKLOAD}"
           environment         = "${ENVIRONMENT}"
           region              = "${REGION}"
-          role                = ${ROLE:+\"$ROLE\"}${ROLE:-null}
-          instance            = ${INSTANCE:+\"$INSTANCE\"}${INSTANCE:-null}
+          role                = ${ROLE_VAL}
+          instance            = ${INST_VAL}
           resource_group_name = "rg-${REGION_CODE}-${ENVIRONMENT}-${WORKLOAD}"
           owner               = "${OWNER}"
           cost_center         = "${COST_CENTER}"
