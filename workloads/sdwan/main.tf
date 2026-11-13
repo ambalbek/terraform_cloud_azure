@@ -72,6 +72,35 @@ module "eventhub" {
 }
 
 # =============================================================================
+# Note: prevent_destroy and for_each modules
+# =============================================================================
+#
+# Terraform does not support lifecycle { prevent_destroy = true } on module
+# blocks that use for_each (the meta-argument is not allowed alongside
+# lifecycle on module calls).  The following stateful resources WOULD have
+# prevent_destroy if they were defined inline:
+#
+#   - azurerm_eventhub_namespace
+#   - azurerm_storage_account
+#   - azurerm_key_vault
+#
+# Instead, stateful-resource protection is provided by two mechanisms:
+#
+#   1. CanNotDelete management locks on prod resource groups (applied by the
+#      bootstrap module).  These locks require Owner role to remove, so a
+#      contributor-level apply cannot accidentally destroy the RG or its
+#      children.
+#
+#   2. The allow-destroy workflow guard in plan.yml / apply.yml.  If a
+#      terraform plan contains any destroy actions the PR must carry the
+#      "allow-destroy" label before merge is permitted.  This gives reviewers
+#      an explicit gate before any resource removal reaches Azure.
+#
+# Together these two layers provide equivalent (or stronger) protection to
+# prevent_destroy for resources managed via for_each modules.
+# =============================================================================
+
+# =============================================================================
 # Outputs
 # =============================================================================
 

@@ -280,3 +280,70 @@ run "unknown_region_brazilsouth" {
     error_message = "Expected 'rg-prod-sdwan' for unmapped region, got '${output.name}'"
   }
 }
+
+# -------------------------------------------------------
+# Map key parsing tests (workload main.tf for_each keys)
+# -------------------------------------------------------
+# In workloads/<name>/main.tf the map key is split on "-" to derive role and
+# instance.  These tests verify the naming module produces the correct output
+# for typical key patterns.
+
+# 16. Key "db-01" => role="db", instance="01"
+#     eventhub_namespace in northcentralus dev sdwan
+run "evhns_ncus_dev_sdwan_db_01" {
+  command = plan
+
+  variables {
+    resource_type = "eventhub_namespace"
+    location      = "northcentralus"
+    environment   = "dev"
+    workload      = "sdwan"
+    role          = "db"
+    instance      = "01"
+  }
+
+  assert {
+    condition     = output.name == "evhns-ncus-dev-sdwan-db-01"
+    error_message = "Expected 'evhns-ncus-dev-sdwan-db-01', got '${output.name}'"
+  }
+}
+
+# 17. Key "default" => role=null, instance=null
+#     The workload main.tf strips "default" before passing to naming, so the
+#     naming module receives role=null. This test verifies that role=null
+#     produces a name without a trailing role segment.
+#     eventhub_namespace in centralus dev sdwan
+run "evhns_cus_dev_sdwan_no_role" {
+  command = plan
+
+  variables {
+    resource_type = "eventhub_namespace"
+    location      = "centralus"
+    environment   = "dev"
+    workload      = "sdwan"
+  }
+
+  assert {
+    condition     = output.name == "evhns-cus-dev-sdwan"
+    error_message = "Expected 'evhns-cus-dev-sdwan', got '${output.name}'"
+  }
+}
+
+# 18. role="db", instance=null => name includes role but no instance
+#     eventhub_namespace in northcentralus dev sdwan
+run "evhns_ncus_dev_sdwan_db_no_instance" {
+  command = plan
+
+  variables {
+    resource_type = "eventhub_namespace"
+    location      = "northcentralus"
+    environment   = "dev"
+    workload      = "sdwan"
+    role          = "db"
+  }
+
+  assert {
+    condition     = output.name == "evhns-ncus-dev-sdwan-db"
+    error_message = "Expected 'evhns-ncus-dev-sdwan-db', got '${output.name}'"
+  }
+}
