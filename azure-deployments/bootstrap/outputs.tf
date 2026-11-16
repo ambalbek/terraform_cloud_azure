@@ -30,15 +30,6 @@ output "apply_client_ids" {
   }
 }
 
-output "resource_group_ids" {
-  description = "Map of workspace name to resource group ID."
-  value       = { for k, v in azurerm_resource_group.this : k => v.id }
-}
-
-output "resource_group_names" {
-  description = "Map of workspace name to resource group name."
-  value       = { for k, v in azurerm_resource_group.this : k => v.name }
-}
 
 output "fed_cred_count" {
   description = "Federated credential count per application (max 20)."

@@ -1,7 +1,15 @@
 {
+  "resource_groups": {
+    "default": {
+      "location": "northcentralus",
+      "owner": "cloud-coe",
+      "cost_center": "CC-1234"
+    }
+  },
   "eventhub_namespaces": {
     "db-01": {
       "location": "centralus",
+      "resource_group_key": "default",
       "namespace_sku": "Standard",
       "capacity": 1,
       "auto_inflate_enabled": false,
@@ -12,6 +20,7 @@
     },
     "default": {
       "location": "northcentralus",
+      "resource_group_key": "default",
       "namespace_sku": "Standard",
       "capacity": 1,
       "auto_inflate_enabled": false,

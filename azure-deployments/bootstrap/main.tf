@@ -77,18 +77,6 @@ locals {
     ])
   }
 
-  # Resource groups: one per workload-environment, named by convention
-  # rg-<region_code>-<env>-<workload>
-  # Region comes from the first allowed region (platform default).
-  # Override per workload-env if needed via a future variable.
-  rg_entries = {
-    for ws_key, ws in local.workspace_map : ws_key => {
-      workload    = ws.workload
-      environment = ws.environment
-      project     = ws.project
-      workspace   = ws.workspace
-    }
-  }
 }
 
 # =============================================================================
@@ -285,58 +273,14 @@ resource "azuread_application_federated_identity_credential" "this" {
 }
 
 # =============================================================================
-# Azure RM: Resource Groups (one per workload-environment)
-# =============================================================================
-#
-# Resource groups are created by bootstrap, not by workload Terraform.
-# Workloads look them up with data sources and reference by key.
-# This ensures role assignments can be scoped before workload runs.
-#
-# Consequence: adding a new resource group is a bootstrap change by the
-# platform team, not a developer self-service action.
-
-resource "azurerm_resource_group" "this" {
-  for_each = local.rg_entries
-
-  name     = "rg-${each.value.environment}-${each.value.workload}"
-  location = var.allowed_regions[0]
-
-  tags = {
-    environment = each.value.environment
-    workload    = each.value.workload
-    managed_by  = "terraform-bootstrap"
-  }
-}
-
-# =============================================================================
-# Azure RM: Management Locks (CanNotDelete on prod resource groups)
-# =============================================================================
-#
-# Deleting anything in a locked prod group requires someone with Owner
-# rights to remove the lock first. This is intentional.
-
-resource "azurerm_management_lock" "prod" {
-  for_each = {
-    for k, v in local.rg_entries : k => v if v.environment == "prod"
-  }
-
-  name       = "CanNotDelete-${each.key}"
-  scope      = azurerm_resource_group.this[each.key].id
-  lock_level = "CanNotDelete"
-  notes      = "Prod resource group — removal requires Owner to delete lock first"
-}
-
-# =============================================================================
 # Azure RM: Role Assignments
 # =============================================================================
 #
-# Plan identity: Reader at subscription scope (acceptable for plan).
-# Apply identity: Contributor scoped to its own project's resource groups only.
-#   This means a nonprod apply identity cannot modify prod resources.
-#
-# Note: the apply identity has Contributor on each RG of its project, which
-# is sufficient to create/modify resources within those groups. It cannot
-# create new resource groups (that's a bootstrap action).
+# Plan identity: Reader at subscription scope.
+# Apply identity: Contributor at subscription scope — needed so workloads
+#   can self-service create resource groups and any Azure resource type.
+#   Azure Policy (allowed regions, required tags, no public endpoints)
+#   provides the guardrails instead of role scoping.
 
 # Plan: subscription-scoped Reader (one per project)
 resource "azurerm_role_assignment" "plan" {
@@ -349,25 +293,15 @@ resource "azurerm_role_assignment" "plan" {
   principal_id         = azuread_service_principal.this[each.key].object_id
 }
 
-# Apply: RG-scoped Contributor (one assignment per RG per project's apply identity)
-locals {
-  apply_rg_assignments = flatten([
-    for rg_key, rg in local.rg_entries : {
-      key          = "${rg.project}-apply-${rg_key}"
-      rg_key       = rg_key
-      identity_key = "${rg.project}-apply"
-    }
-  ])
-
-  apply_rg_assignment_map = { for a in local.apply_rg_assignments : a.key => a }
-}
-
+# Apply: subscription-scoped Contributor (one per project)
 resource "azurerm_role_assignment" "apply" {
-  for_each = local.apply_rg_assignment_map
+  for_each = {
+    for k, v in local.identity_map : k => v if v.phase == "apply"
+  }
 
-  scope                = azurerm_resource_group.this[each.value.rg_key].id
+  scope                = "/subscriptions/${var.subscription_id}"
   role_definition_name = "Contributor"
-  principal_id         = azuread_service_principal.this[each.value.identity_key].object_id
+  principal_id         = azuread_service_principal.this[each.key].object_id
 }
 
 # =============================================================================

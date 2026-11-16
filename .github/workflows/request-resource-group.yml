@@ -1,0 +1,70 @@
+name: "Request: Resource Group"
+
+on:
+  workflow_dispatch:
+    inputs:
+      workload:
+        type: choice
+        required: true
+        description: 'Workload'
+        options:
+          - sdwan
+          - sdwan-fgt
+          - hub
+          - probe
+          - core
+          - app
+      environment:
+        type: choice
+        required: true
+        description: 'Target environment(s)'
+        options:
+          - dev
+          - uat
+          - prod
+          - dev,uat
+          - dev,uat,prod
+          - test
+          - qa
+          - nonprod
+      region:
+        type: choice
+        required: true
+        description: 'Azure Region'
+        options:
+          - centralus
+          - canadacentral
+          - northcentralus
+          - southcentralus
+          - westeurope
+          - northeurope
+          - australiaeast
+          - australiasoutheast
+      key:
+        type: string
+        required: true
+        description: 'Resource key (e.g. default, fgt, data-01)'
+      owner:
+        type: string
+        required: true
+        description: 'Owner (team or user)'
+      cost_center:
+        type: string
+        required: true
+        description: 'Cost Center'
+
+jobs:
+  request:
+    uses: ./.github/workflows/_request.yml
+    with:
+      workload: ${{ inputs.workload }}
+      environments: ${{ inputs.environment }}
+      region: ${{ inputs.region }}
+      resource_type: resource_group
+      key: ${{ inputs.key }}
+      parameters_json: >-
+        {
+          "owner": "${{ inputs.owner }}",
+          "cost_center": "${{ inputs.cost_center }}"
+        }
+    secrets: inherit
